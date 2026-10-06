@@ -208,6 +208,10 @@ func (s *Session) Exec(query string, params ...record.Value) ([]*Result, error) 
 	return out, nil
 }
 
+// MarkFailed puts an open explicit transaction into the failed state, as
+// happens in PostgreSQL when any statement in it errors.
+func (s *Session) MarkFailed() { s.markFailed() }
+
 func (s *Session) markFailed() {
 	if s.tx != nil {
 		s.tx.rollback()
@@ -423,7 +427,10 @@ func (s *Session) explain(p *planner, st sql.Stmt) ([]string, error) {
 
 // Describe returns the result columns a statement will produce, without
 // running it. Used by the wire protocol for prepared statements.
-func (s *Session) Describe(st sql.Stmt) ([]Column, error) {
+func (s *Session) Describe(st sql.Stmt) ([]Column, error) { return s.DescribeWith(st, nil) }
+
+// DescribeWith is Describe with known parameter values (nil if unknown).
+func (s *Session) DescribeWith(st sql.Stmt, params []record.Value) ([]Column, error) {
 	switch st := st.(type) {
 	case *sql.Select:
 		tx := s.tx
@@ -437,7 +444,7 @@ func (s *Session) Describe(st sql.Stmt) ([]Column, error) {
 		if err != nil {
 			return nil, AsError(err)
 		}
-		plan, err := (&planner{cat: cat}).planSelect(st)
+		plan, err := (&planner{cat: cat, params: params}).planSelect(st)
 		if err != nil {
 			return nil, AsError(err)
 		}
