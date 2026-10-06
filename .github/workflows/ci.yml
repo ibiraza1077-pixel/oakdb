@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Lint and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
+      - name: go vet
+        run: go vet ./...
+      - name: Tests with the race detector
+        run: go test -race ./...
+      - name: Longer differential run against SQLite
+        run: OAKDB_DIFF_ITERS=8000 go test ./tests -run Differential
+      - name: More crash rounds
+        run: OAKDB_CRASH_ROUNDS=60 go test ./tests -run Crash
+
+  fuzz:
+    name: Fuzz
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target:
+          - { pkg: ./internal/sql, fn: FuzzParse }
+          - { pkg: ./internal/btree, fn: FuzzTree }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - run: go test ${{ matrix.target.pkg }} -run XXX -fuzz ${{ matrix.target.fn }} -fuzztime 45s
+
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - run: go test -coverpkg=./internal/... -coverprofile=coverage.out ./...
+      - run: go tool cover -func=coverage.out | tail -1
