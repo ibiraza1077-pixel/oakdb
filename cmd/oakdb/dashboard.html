@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OakDB Monitor</title>
+<style>
+  :root {
+    --bg: #f6f5f1; --panel: #ffffff; --ink: #1d2320; --muted: #66706a;
+    --line: #e2e0d8; --accent: #2f6f4f; --accent-soft: #dcebe2; --bad: #b4442f;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #121614; --panel: #1a201d; --ink: #e8ece9; --muted: #93a099;
+      --line: #2a332e; --accent: #6fc196; --accent-soft: #1f3a2c; --bad: #e57a62;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 1040px; margin: 0 auto; padding: 32px 16px 48px; }
+  header { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+  h1 { font-size: 24px; margin: 0; letter-spacing: -0.01em; }
+  h1 span { color: var(--accent); }
+  .status { color: var(--muted); font-size: 13px; }
+  .status b { color: var(--accent); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-top: 24px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+  .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; }
+  .value { font-size: 26px; font-weight: 650; font-variant-numeric: tabular-nums; margin-top: 2px; }
+  .sub { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .wide { grid-column: 1 / -1; }
+  canvas { width: 100%; height: 120px; display: block; margin-top: 8px; }
+  .bar { height: 8px; background: var(--accent-soft); border-radius: 4px; overflow: hidden; margin-top: 8px; }
+  .bar div { height: 100%; background: var(--accent); width: 0; transition: width .4s; }
+  h2 { font-size: 16px; margin: 32px 0 8px; }
+  table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--line); font-size: 14px; }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; }
+  tr:last-child td { border-bottom: none; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+  .empty { color: var(--muted); padding: 16px; background: var(--panel); border: 1px dashed var(--line); border-radius: 10px; }
+  .err { color: var(--bad); }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Oak<span>DB</span> monitor</h1>
+    <div class="status" id="status">connecting…</div>
+  </header>
+
+  <section class="grid">
+    <div class="card wide">
+      <div class="label">Queries per second</div>
+      <div class="value" id="qps">0</div>
+      <canvas id="chart" width="1000" height="120" aria-label="Queries per second over the last two minutes"></canvas>
+    </div>
+    <div class="card"><div class="label">Total queries</div><div class="value" id="queries">0</div><div class="sub" id="errors">0 errors</div></div>
+    <div class="card"><div class="label">Sessions</div><div class="value" id="sessions">0</div><div class="sub" id="readers">0 active readers</div></div>
+    <div class="card"><div class="label">Commits</div><div class="value" id="commits">0</div><div class="sub" id="rollbacks">0 rollbacks</div></div>
+    <div class="card">
+      <div class="label">Buffer pool hit rate</div><div class="value" id="hit">–</div>
+      <div class="bar"><div id="hitbar"></div></div>
+      <div class="sub" id="cached">0 pages cached</div>
+    </div>
+    <div class="card"><div class="label">Database size</div><div class="value" id="size">0</div><div class="sub" id="pages">0 pages of 4 KB</div></div>
+    <div class="card"><div class="label">Write-ahead log</div><div class="value" id="wal">0</div><div class="sub" id="checkpoints">0 checkpoints</div></div>
+  </section>
+
+  <h2>Tables</h2>
+  <div id="schema"></div>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const fmt = (n) => Number(n).toLocaleString();
+const history = [];
+let last = null;
+
+function bytes(n) {
+  const u = ["B", "KB", "MB", "GB"];
+  let i = 0;
+  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+  return (i ? n.toFixed(1) : n) + " " + u[i];
+}
+
+function uptime(s) {
+  const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60);
+  return h ? `${h}h ${m}m` : m ? `${m}m ${s % 60}s` : `${s}s`;
+}
+
+function draw() {
+  const c = $("chart"), ctx = c.getContext("2d");
+  const w = c.width, h = c.height;
+  ctx.clearRect(0, 0, w, h);
+  const css = getComputedStyle(document.documentElement);
+  const max = Math.max(1, ...history);
+  ctx.strokeStyle = css.getPropertyValue("--line");
+  ctx.lineWidth = 1;
+  for (let i = 1; i < 4; i++) {
+    const y = Math.round(h * i / 4) + 0.5;
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
+  }
+  if (history.length < 2) return;
+  const step = w / 119;
+  const pts = history.map((v, i) => [w - (history.length - 1 - i) * step, h - 6 - (v / max) * (h - 12)]);
+  ctx.beginPath();
+  pts.forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y));
+  ctx.lineTo(pts[pts.length - 1][0], h); ctx.lineTo(pts[0][0], h); ctx.closePath();
+  ctx.fillStyle = css.getPropertyValue("--accent-soft"); ctx.fill();
+  ctx.beginPath();
+  pts.forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y));
+  ctx.strokeStyle = css.getPropertyValue("--accent"); ctx.lineWidth = 2; ctx.stroke();
+}
+
+async function tick() {
+  try {
+    const s = await (await fetch("stats.json", { cache: "no-store" })).json();
+    const now = performance.now();
+    if (last) {
+      const qps = (s.queries - last.s.queries) / ((now - last.t) / 1000);
+      history.push(Math.max(0, qps));
+      if (history.length > 120) history.shift();
+      $("qps").textContent = qps >= 100 ? fmt(Math.round(qps)) : qps.toFixed(1);
+    }
+    last = { s, t: now };
+    $("status").innerHTML = `<b>●</b> ${s.version} · up ${uptime(s.uptime_seconds)}`;
+    $("queries").textContent = fmt(s.queries);
+    $("errors").textContent = `${fmt(s.errors)} errors`;
+    $("sessions").textContent = fmt(s.sessions);
+    $("readers").textContent = `${fmt(s.active_readers)} active readers`;
+    $("commits").textContent = fmt(s.commits);
+    $("rollbacks").textContent = `${fmt(s.rollbacks)} rollbacks`;
+    const total = s.cache_hits + s.cache_misses;
+    $("hit").textContent = total ? (s.cache_hit_rate * 100).toFixed(1) + "%" : "–";
+    $("hitbar").style.width = (s.cache_hit_rate * 100) + "%";
+    $("cached").textContent = `${fmt(s.cached_pages)} pages cached`;
+    $("size").textContent = bytes(s.database_bytes);
+    $("pages").textContent = `${fmt(s.pages)} pages of 4 KB`;
+    $("wal").textContent = `${fmt(s.wal_frames)} frames`;
+    $("checkpoints").textContent = `${fmt(s.checkpoints)} checkpoints`;
+    draw();
+  } catch (e) {
+    $("status").innerHTML = `<span class="err">● server unreachable</span>`;
+  }
+}
+
+const TYPES = ["null", "integer", "real", "text", "boolean"];
+async function schema() {
+  try {
+    const tables = await (await fetch("schema.json", { cache: "no-store" })).json();
+    const el = $("schema");
+    if (!tables || !tables.length) {
+      el.innerHTML = `<div class="empty">No tables yet. Connect with <code>psql "postgres://localhost:5433/oakdb?sslmode=disable"</code> and create one.</div>`;
+      return;
+    }
+    const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+    el.innerHTML = `<table><thead><tr><th>Table</th><th>Columns</th><th>Indexes</th></tr></thead><tbody>` +
+      tables.map((t) => `<tr><td><code>${esc(t.Name)}</code></td><td>${t.Columns.map((c) =>
+        `<code>${esc(c.Name)}</code> ${TYPES[c.Type] || ""}${c.Name === t.PrimaryKey ? " (pk)" : ""}`).join(", ")}</td><td>${
+        (t.Indexes || []).map((i) => `<code>${esc(i.Name)}</code>`).join(", ") || "–"}</td></tr>`).join("") +
+      `</tbody></table>`;
+  } catch (e) { /* the stats tick reports connectivity */ }
+}
+
+tick(); schema();
+setInterval(tick, 1000);
+setInterval(schema, 5000);
+</script>
+</body>
+</html>

@@ -3,6 +3,9 @@
 package engine
 
 import (
+	"bytes"
+	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -96,6 +99,7 @@ type Result struct {
 // Session is one client connection's state. It is not safe for concurrent use.
 type Session struct {
 	db     *DB
+	cache  map[string][]sql.Stmt // parsed statements, keyed by query text
 	tx     *txn
 	failed bool // an error happened inside an explicit transaction
 	closed bool
@@ -191,11 +195,20 @@ func (t *txn) rollback() {
 // Exec parses and runs one or more statements. It returns the results of
 // the statements that ran; on error, the error describes the failing one.
 func (s *Session) Exec(query string, params ...record.Value) ([]*Result, error) {
-	stmts, err := sql.Parse(query)
-	if err != nil {
-		s.db.errors.Add(1)
-		s.markFailed()
-		return nil, AsError(err)
+	stmts, ok := s.cache[query]
+	if !ok {
+		var err error
+		if stmts, err = sql.Parse(query); err != nil {
+			s.db.errors.Add(1)
+			s.markFailed()
+			return nil, AsError(err)
+		}
+		// Plans are not cached (they depend on the schema and parameter
+		// values), but parsing is skipped for repeated query text.
+		if s.cache == nil || len(s.cache) > 256 {
+			s.cache = map[string][]sql.Stmt{}
+		}
+		s.cache[query] = stmts
 	}
 	var out []*Result
 	for _, st := range stmts {
@@ -513,3 +526,120 @@ func ParamCount(st sql.Stmt) int {
 }
 
 func itoa(n int) string { return strconv.Itoa(n) }
+
+// TableInfo describes a table for tools like the shell's \d command.
+type TableInfo struct {
+	Name       string
+	Columns    []ColumnInfo
+	PrimaryKey string
+	Indexes    []IndexInfo
+}
+
+// ColumnInfo describes one column.
+type ColumnInfo struct {
+	Name    string
+	Type    record.Kind
+	NotNull bool
+}
+
+// IndexInfo describes one index.
+type IndexInfo struct {
+	Name    string
+	Columns []string
+	Unique  bool
+}
+
+// Schema lists every table, sorted by name.
+func (db *DB) Schema() ([]TableInfo, error) {
+	snap := db.pager.BeginRead()
+	defer snap.Release()
+	cat, err := db.catalogFor(snap)
+	if err != nil {
+		return nil, err
+	}
+	var out []TableInfo
+	for _, t := range cat.Tables {
+		ti := TableInfo{Name: t.Name}
+		for _, c := range t.Columns {
+			ti.Columns = append(ti.Columns, ColumnInfo{Name: c.Name, Type: c.Type, NotNull: c.NotNull})
+		}
+		if t.PK >= 0 {
+			ti.PrimaryKey = t.Columns[t.PK].Name
+		}
+		for _, ix := range t.Indexes {
+			ii := IndexInfo{Name: ix.Name, Unique: ix.Unique}
+			for _, c := range ix.Columns {
+				ii.Columns = append(ii.Columns, t.Columns[c].Name)
+			}
+			ti.Indexes = append(ti.Indexes, ii)
+		}
+		out = append(out, ti)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+// Check walks every table and index and verifies the B-tree invariants and
+// that every index matches its table exactly. It is what "oakdb check" and
+// the crash tests use to prove the file is consistent.
+func (db *DB) Check() error {
+	snap := db.pager.BeginRead()
+	defer snap.Release()
+	cat, err := db.catalogFor(snap)
+	if err != nil {
+		return err
+	}
+	for _, t := range cat.Tables {
+		st, err := btree.Inspect(snap, t.Root)
+		if err != nil {
+			return fmt.Errorf("table %s: %w", t.Name, err)
+		}
+		rows := map[string]Row{}
+		cur := btree.NewCursor(snap, t.Root)
+		for cur.First(); cur.Valid(); cur.Next() {
+			v, err := cur.Value()
+			if err != nil {
+				return fmt.Errorf("table %s: %w", t.Name, err)
+			}
+			row, err := record.DecodeRow(v)
+			if err != nil {
+				return fmt.Errorf("table %s: %w", t.Name, err)
+			}
+			if len(row) != len(t.Columns) {
+				return fmt.Errorf("table %s: row has %d values, want %d", t.Name, len(row), len(t.Columns))
+			}
+			rows[string(cur.Key())] = row
+		}
+		if err := cur.Err(); err != nil {
+			return err
+		}
+		if len(rows) != st.Entries {
+			return fmt.Errorf("table %s: cursor saw %d rows, tree has %d", t.Name, len(rows), st.Entries)
+		}
+		for _, ix := range t.Indexes {
+			ist, err := btree.Inspect(snap, ix.Root)
+			if err != nil {
+				return fmt.Errorf("index %s: %w", ix.Name, err)
+			}
+			if ist.Entries != len(rows) {
+				return fmt.Errorf("index %s has %d entries, table %s has %d rows", ix.Name, ist.Entries, t.Name, len(rows))
+			}
+			c := btree.NewCursor(snap, ix.Root)
+			for c.First(); c.Valid(); c.Next() {
+				k := c.Key()
+				off, err := record.SkipKey(k, len(ix.Columns))
+				if err != nil {
+					return fmt.Errorf("index %s: %w", ix.Name, err)
+				}
+				row, ok := rows[string(k[off:])]
+				if !ok {
+					return fmt.Errorf("index %s points to a missing row", ix.Name)
+				}
+				if prefix, _ := indexPrefix(ix, row); !bytes.Equal(prefix, k[:off]) {
+					return fmt.Errorf("index %s entry does not match its row", ix.Name)
+				}
+			}
+		}
+	}
+	return nil
+}

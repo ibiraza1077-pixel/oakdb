@@ -385,7 +385,7 @@ type filterNode struct {
 
 func (f *filterNode) width() int { return f.child.width() }
 func (f *filterNode) explain() (string, []planNode) {
-	return "Filter (" + f.text + ")", []planNode{f.child}
+	return "Filter: " + f.text, []planNode{f.child}
 }
 func (f *filterNode) open(ctx *execCtx, outer Row) (iterator, error) {
 	it, err := f.child.open(ctx, outer)
