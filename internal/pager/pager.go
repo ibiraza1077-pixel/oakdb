@@ -515,3 +515,21 @@ func (p *Pager) checkpointLocked() error {
 	p.stats.Checkpoints++
 	return nil
 }
+
+// Meta is the database header stored in page 0.
+type Meta struct {
+	PageCount   uint32
+	FreeList    uint32
+	CatalogRoot uint32
+	SchemaToken uint64
+}
+
+// ReadMeta decodes the header from page 0.
+func ReadMeta(page0 []byte) Meta {
+	return Meta{
+		PageCount:   binary.LittleEndian.Uint32(page0[offPageCount:]),
+		FreeList:    binary.LittleEndian.Uint32(page0[offFreeList:]),
+		CatalogRoot: binary.LittleEndian.Uint32(page0[offCatalogRoot:]),
+		SchemaToken: binary.LittleEndian.Uint64(page0[offSchemaToken:]),
+	}
+}

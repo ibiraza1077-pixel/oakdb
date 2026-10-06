@@ -424,3 +424,42 @@ func DecodeKey(b []byte, kinds []Kind) ([]Value, error) {
 	}
 	return out, nil
 }
+
+// SkipKey returns the length of the first n encoded values at the start of
+// an encoded key. Index entries use it to find where the table key begins.
+func SkipKey(b []byte, n int) (int, error) {
+	off := 0
+	for i := 0; i < n; i++ {
+		if off >= len(b) {
+			return 0, errCorrupt
+		}
+		switch b[off] {
+		case tagNull, tagFalse, tagTrue:
+			off++
+		case tagNum:
+			off += 17
+		case tagText:
+			off++
+			for {
+				if off+1 >= len(b) {
+					return 0, errCorrupt
+				}
+				if b[off] == 0x00 {
+					if b[off+1] == 0x01 {
+						off += 2
+						break
+					}
+					off += 2
+					continue
+				}
+				off++
+			}
+		default:
+			return 0, errCorrupt
+		}
+	}
+	if off > len(b) {
+		return 0, errCorrupt
+	}
+	return off, nil
+}
