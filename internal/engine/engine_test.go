@@ -143,6 +143,11 @@ func TestPlansUseIndexes(t *testing.T) {
 	if p := plan("SELECT * FROM orders WHERE user_id = 1"); !strings.Contains(p, "Index Scan using orders_user") {
 		t.Errorf("index not used:\n%s", p)
 	}
+	if p := plan("SELECT count(*) FROM orders WHERE user_id = 1"); !strings.Contains(p, "Index Only Scan using orders_user") {
+		t.Errorf("index-only scan not used:\n%s", p)
+	}
+	check(t, s, "SELECT count(*), sum(id) FROM orders WHERE user_id = 1", "2|3")
+	check(t, s, "SELECT user_id, id FROM orders WHERE user_id >= 2 ORDER BY id", "2|3\n3|4\n9|5")
 	if p := plan("SELECT * FROM users WHERE id > 1 AND id <= 3"); !strings.Contains(p, "id > 1 AND id <= 3") {
 		t.Errorf("pk range not used:\n%s", p)
 	}

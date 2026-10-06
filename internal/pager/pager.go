@@ -57,7 +57,7 @@ type Options struct {
 	// NoSync skips fsync. Only for tests and benchmarks: a power cut can
 	// lose committed transactions (a process crash cannot).
 	NoSync bool
-	// CachePages is the buffer pool size in pages. Default 4096 (16 MB).
+	// CachePages is the buffer pool size in pages. Default 8192 (32 MB).
 	CachePages int
 	// CheckpointFrames is the WAL size, in frames, that triggers a
 	// checkpoint. Default 1000.
@@ -100,7 +100,7 @@ type Stats struct {
 // path + "-wal".
 func Open(path string, opts Options) (*Pager, error) {
 	if opts.CachePages <= 0 {
-		opts.CachePages = 4096
+		opts.CachePages = 8192
 	}
 	if opts.CheckpointFrames <= 0 {
 		opts.CheckpointFrames = 1000

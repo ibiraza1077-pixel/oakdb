@@ -149,7 +149,7 @@ func TestRandomOperationsAgainstMap(t *testing.T) {
 func TestDeleteEverythingFreesPages(t *testing.T) {
 	m := newMem()
 	root, _ := Create(m)
-	for i := 0; i < 20000; i++ {
+	for _, i := range rand.New(rand.NewSource(1)).Perm(20000) {
 		if err := Insert(m, root, key(i), bytes.Repeat([]byte{byte(i)}, 40), false); err != nil {
 			t.Fatal(err)
 		}
@@ -296,4 +296,22 @@ func FuzzTree(f *testing.F) {
 		}
 		checkTree(t, m, root, model)
 	})
+}
+
+// Sequential inserts should pack leaves nearly full (the append split).
+func TestAppendPacksLeaves(t *testing.T) {
+	m := newMem()
+	root, _ := Create(m)
+	for i := 0; i < 20000; i++ {
+		Insert(m, root, key(i), bytes.Repeat([]byte{1}, 40), false)
+	}
+	st, err := Inspect(m, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	perLeaf := float64(st.Entries) / float64(st.Leaves)
+	// A 4 KB page holds about 77 of these cells.
+	if perLeaf < 70 {
+		t.Fatalf("leaves are only %.0f entries full on average", perLeaf)
+	}
 }

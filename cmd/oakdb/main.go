@@ -2,6 +2,7 @@
 //
 //	oakdb serve [-data FILE] [-addr HOST:PORT] [-http HOST:PORT]
 //	oakdb shell [-data FILE]
+//	oakdb check [-data FILE]
 //	oakdb version
 package main
 
@@ -38,6 +39,8 @@ func main() {
 		err = serve(os.Args[2:])
 	case "shell":
 		err = shell(os.Args[2:])
+	case "check":
+		err = checkCmd(os.Args[2:])
 	case "version", "-v", "--version":
 		fmt.Println(engine.VersionString)
 	case "help", "-h", "--help":
@@ -62,8 +65,27 @@ Usage:
         psql "postgres://localhost:5433/oakdb?sslmode=disable"
   oakdb shell [-data oak.db]
         Open the database directly in an interactive SQL shell.
+  oakdb check [-data oak.db]
+        Verify every B-tree and index in the file.
   oakdb version
 `)
+}
+
+func checkCmd(args []string) error {
+	fs := flag.NewFlagSet("check", flag.ExitOnError)
+	data := fs.String("data", "oak.db", "database file")
+	fs.Parse(args)
+	db, err := engine.Open(*data, engine.Options{})
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	if err := db.Check(); err != nil {
+		return fmt.Errorf("integrity check failed: %w", err)
+	}
+	st := db.Stats()
+	fmt.Printf("ok: %d pages, every table and index is consistent\n", st.PageCount)
+	return nil
 }
 
 func serve(args []string) error {

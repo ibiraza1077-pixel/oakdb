@@ -343,6 +343,9 @@ func (p *planner) planSelect(s *sql.Select) (*selectPlan, error) {
 		if err != nil {
 			return nil, err
 		}
+		if ap.index != nil && len(tables) == 1 {
+			ap.indexOnly = coveredBy(ap, usedColumns(s, sc))
+		}
 		node = ap
 		singleTablePK = ap.index == nil && ft.t.PK >= 0
 		if len(firstOnly) > 0 {
@@ -564,6 +567,64 @@ func (p *planner) planSelect(s *sql.Select) (*selectPlan, error) {
 		node = &trimNode{child: node, n: nOut}
 	}
 	return &selectPlan{root: node, cols: cols}, nil
+}
+
+// usedColumns returns the positions of every column a single-table SELECT
+// reads, or nil if it reads them all (SELECT *).
+func usedColumns(s *sql.Select, sc *scope) map[int]bool {
+	used := map[int]bool{}
+	all := false
+	mark := func(e sql.Expr) {
+		mapExpr(e, func(x sql.Expr) sql.Expr {
+			if ref, ok := x.(*sql.ColumnRef); ok {
+				// Names that do not resolve are output aliases
+				// (ORDER BY total), which need no table column.
+				if i, err := sc.resolve(ref); err == nil {
+					used[i] = true
+				}
+			}
+			return x
+		})
+	}
+	for _, it := range s.Items {
+		if it.Star {
+			all = true
+		}
+		mark(it.Expr)
+	}
+	mark(s.Where)
+	for _, g := range s.GroupBy {
+		mark(g)
+	}
+	mark(s.Having)
+	for _, o := range s.OrderBy {
+		mark(o.Expr)
+	}
+	if all {
+		return nil
+	}
+	return used
+}
+
+// coveredBy reports whether an index holds every column in used. The
+// primary key is always available because it is the suffix of every entry.
+func coveredBy(ap *accessPath, used map[int]bool) bool {
+	if used == nil {
+		return false
+	}
+	have := map[int]bool{}
+	for _, c := range ap.index.Columns {
+		have[c] = true
+	}
+	if ap.table.PK >= 0 {
+		have[ap.table.PK] = true
+	}
+	for c := range used {
+		if !have[c] {
+			return false
+		}
+	}
+	return true
 }
 
 // alreadyOrdered reports whether a single-table plan reads rows in the

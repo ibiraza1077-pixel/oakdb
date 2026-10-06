@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="372" viewBox="0 0 760 372" role="img" aria-labelledby="t d">
+<title id="t">OakDB throughput relative to SQLite</title>
+<desc id="d">Bar length shows OakDB operations per second divided by SQLite's, on a log scale; the line at 1x is parity.</desc>
+<style>
+  .bg{fill:#fcfcfb} .ink{fill:#0b0b0b} .muted{fill:#52514e} .grid{stroke:#e4e3de} .par{stroke:#52514e} .bar{fill:#2a78d6}
+  text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}
+  @media (prefers-color-scheme: dark){ .bg{fill:#1a1a19} .ink{fill:#ffffff} .muted{fill:#c3c2b7} .grid{stroke:#2e2e2c} .par{stroke:#c3c2b7} .bar{fill:#3987e5} }
+</style>
+<rect class="bg" width="760" height="372" rx="12"/>
+<text class="ink" x="24" y="34" font-size="17" font-weight="600">OakDB throughput relative to SQLite</text>
+<text class="muted" x="24" y="54" font-size="12.5">Log scale. Left of the line: slower than SQLite. Right: faster.</text>
+<line class="grid" x1="270.0" x2="270.0" y1="58" y2="328" stroke-width="1"/>
+<text class="muted" x="270.0" y="346" font-size="11.5" text-anchor="middle">0.1×</text>
+<line class="grid" x1="333.2" x2="333.2" y1="58" y2="328" stroke-width="1"/>
+<text class="muted" x="333.2" y="346" font-size="11.5" text-anchor="middle">0.2×</text>
+<line class="grid" x1="416.8" x2="416.8" y1="58" y2="328" stroke-width="1"/>
+<text class="muted" x="416.8" y="346" font-size="11.5" text-anchor="middle">0.5×</text>
+<line class="par" x1="480.0" x2="480.0" y1="58" y2="328" stroke-width="1"/>
+<text class="muted" x="480.0" y="346" font-size="11.5" text-anchor="middle">1× (parity)</text>
+<line class="grid" x1="543.2" x2="543.2" y1="58" y2="328" stroke-width="1"/>
+<text class="muted" x="543.2" y="346" font-size="11.5" text-anchor="middle">2×</text>
+<line class="grid" x1="626.8" x2="626.8" y1="58" y2="328" stroke-width="1"/>
+<text class="muted" x="626.8" y="346" font-size="11.5" text-anchor="middle">5×</text>
+<line class="grid" x1="690.0" x2="690.0" y1="58" y2="328" stroke-width="1"/>
+<text class="muted" x="690.0" y="346" font-size="11.5" text-anchor="middle">10×</text>
+<text class="ink" x="24" y="86" font-size="13" dominant-baseline="middle">Bulk insert (100k rows, 1 transaction)</text>
+<rect class="bar" x="429.7" y="77" width="50.3" height="18" rx="4"/>
+<rect class="bar" x="476.0" y="77" width="4" height="18"/>
+<text class="ink" x="423.7" y="86" font-size="12.5" font-weight="600" text-anchor="end" dominant-baseline="middle">0.58×</text>
+<text class="ink" x="24" y="130" font-size="13" dominant-baseline="middle">Point lookup by primary key</text>
+<rect class="bar" x="480.0" y="121" width="33.6" height="18" rx="4"/>
+<rect class="bar" x="480.0" y="121" width="4" height="18"/>
+<text class="ink" x="519.6" y="130" font-size="12.5" font-weight="600" text-anchor="start" dominant-baseline="middle">1.45×</text>
+<text class="ink" x="24" y="174" font-size="13" dominant-baseline="middle">Secondary index lookup</text>
+<rect class="bar" x="424.3" y="165" width="55.7" height="18" rx="4"/>
+<rect class="bar" x="476.0" y="165" width="4" height="18"/>
+<text class="ink" x="418.3" y="174" font-size="12.5" font-weight="600" text-anchor="end" dominant-baseline="middle">0.54×</text>
+<text class="ink" x="24" y="218" font-size="13" dominant-baseline="middle">Range scan (100 rows each)</text>
+<rect class="bar" x="385.3" y="209" width="94.7" height="18" rx="4"/>
+<rect class="bar" x="476.0" y="209" width="4" height="18"/>
+<text class="ink" x="379.3" y="218" font-size="12.5" font-weight="600" text-anchor="end" dominant-baseline="middle">0.35×</text>
+<text class="ink" x="24" y="262" font-size="13" dominant-baseline="middle">Full-table GROUP BY aggregate</text>
+<rect class="bar" x="447.9" y="253" width="32.1" height="18" rx="4"/>
+<rect class="bar" x="476.0" y="253" width="4" height="18"/>
+<text class="ink" x="441.9" y="262" font-size="12.5" font-weight="600" text-anchor="end" dominant-baseline="middle">0.70×</text>
+<text class="ink" x="24" y="306" font-size="13" dominant-baseline="middle">Durable single-row commits (fsync)</text>
+<rect class="bar" x="480.0" y="297" width="2.4" height="18" rx="4"/>
+<text class="ink" x="488.4" y="306" font-size="12.5" font-weight="600" text-anchor="start" dominant-baseline="middle">1.03×</text>
+</svg>

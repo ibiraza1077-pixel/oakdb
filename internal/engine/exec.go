@@ -55,6 +55,10 @@ type accessPath struct {
 	lo, hi *keyBound // optional range on the next key column
 	in     []evalFn  // IN-list point lookups on the first key column
 	inText string
+
+	// indexOnly means every column the query needs is stored in the index
+	// entry itself, so the table row is never fetched ("covering index").
+	indexOnly bool
 }
 
 func (a *accessPath) width() int { return len(a.table.Columns) }
@@ -106,6 +110,8 @@ func (a *accessPath) explain() (string, []planNode) {
 		cond = " (" + strings.Join(conds, " AND ") + ")"
 	}
 	switch {
+	case a.index != nil && a.indexOnly:
+		return fmt.Sprintf("Index Only Scan using %s on %s%s", a.index.Name, name, cond), nil
 	case a.index != nil:
 		return fmt.Sprintf("Index Scan using %s on %s%s", a.index.Name, name, cond), nil
 	case len(conds) > 0:
@@ -333,6 +339,10 @@ func (it *accessIter) nextKeyed() ([]byte, Row, error) {
 				return nil, nil, err
 			}
 			tkey := key[off:]
+			if it.a.indexOnly {
+				row, err := it.a.rowFromIndex(key[:off], tkey)
+				return tkey, row, err
+			}
 			val, ok, err := btree.Get(it.ctx.r, it.a.table.Root, tkey)
 			if err != nil {
 				return nil, nil, err
@@ -346,6 +356,32 @@ func (it *accessIter) nextKeyed() ([]byte, Row, error) {
 		row, err := record.DecodeRow(val)
 		return key, row, err
 	}
+}
+
+// rowFromIndex rebuilds the columns an index-only scan needs from the
+// index entry: the indexed values, plus the primary key from the table key.
+// Columns the query does not use are left NULL.
+func (a *accessPath) rowFromIndex(vals, tkey []byte) (Row, error) {
+	row := make(Row, len(a.table.Columns))
+	kinds := make([]record.Kind, len(a.index.Columns))
+	for i, c := range a.index.Columns {
+		kinds[i] = a.table.Columns[c].Type
+	}
+	decoded, err := record.DecodeKey(vals, kinds)
+	if err != nil {
+		return nil, err
+	}
+	for i, c := range a.index.Columns {
+		row[c] = decoded[i]
+	}
+	if a.table.PK >= 0 {
+		pk, err := record.DecodeKey(tkey, []record.Kind{a.table.Columns[a.table.PK].Type})
+		if err != nil || len(pk) != 1 {
+			return nil, fmt.Errorf("corrupt table key in index %s", a.index.Name)
+		}
+		row[a.table.PK] = pk[0]
+	}
+	return row, nil
 }
 
 func (it *accessIter) curErr() error {

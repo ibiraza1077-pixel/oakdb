@@ -324,32 +324,54 @@ type splitResult struct {
 }
 
 func insert(w Writer, pageNo uint32, key, val []byte, replace bool) (*splitResult, error) {
-	nd, err := readNode(w, pageNo)
+	p, err := w.Page(pageNo)
 	if err != nil {
 		return nil, err
 	}
-	if !nd.leaf {
-		idx := sort.Search(len(nd.keys), func(i int) bool { return bytes.Compare(key, nd.keys[i]) < 0 })
-		res, err := insert(w, nd.children[idx], key, val, replace)
+	if !isLeaf(p) {
+		// Descend using the raw page; decode this node only if the child
+		// split and a new separator has to be added here.
+		idx := childIndex(p, key)
+		res, err := insert(w, childAt(p, idx), key, val, replace)
 		if err != nil || res == nil {
+			return nil, err
+		}
+		nd, err := readNode(w, pageNo)
+		if err != nil {
 			return nil, err
 		}
 		nd.keys = insertAt(nd.keys, idx, res.sep)
 		nd.children = insertAt(nd.children, idx+1, res.right)
 		return writeOrSplit(w, pageNo, nd)
 	}
-	i := sort.Search(len(nd.keys), func(i int) bool { return bytes.Compare(nd.keys[i], key) >= 0 })
+	i := lowerBound(p, key)
+	exists := false
+	if i < nCells(p) {
+		k, _ := cellKey(p, i)
+		exists = bytes.Equal(k, key)
+	}
+	if exists && !replace {
+		return nil, ErrExists
+	}
 	lv, err := makeValue(w, val)
 	if err != nil {
 		return nil, err
 	}
-	if i < len(nd.keys) && bytes.Equal(nd.keys[i], key) {
-		if !replace {
-			if lv.overflow {
-				freeOverflow(w, lv.first)
+	if !exists {
+		// Fast path: the new cell fits, so splice it into the slotted page
+		// without decoding the node. This is the common case for inserts.
+		cell := encodeLeafCell(key, lv)
+		if usedBytes(p)+2+len(cell) <= pager.PageSize {
+			m, err := w.Mutable(pageNo)
+			if err != nil {
+				return nil, err
 			}
-			return nil, ErrExists
+			spliceCell(m, i, cell)
+			return nil, nil
 		}
+	}
+	nd := decode(p)
+	if exists {
 		if old := nd.vals[i]; old.overflow {
 			if err := freeOverflow(w, old.first); err != nil {
 				return nil, err
@@ -359,8 +381,103 @@ func insert(w Writer, pageNo uint32, key, val []byte, replace bool) (*splitResul
 	} else {
 		nd.keys = insertAt(nd.keys, i, bytes.Clone(key))
 		nd.vals = insertAt(nd.vals, i, lv)
+		if i == len(nd.keys)-1 && nd.next == 0 && nd.size() > pager.PageSize {
+			return appendSplit(w, pageNo, nd)
+		}
 	}
 	return writeOrSplit(w, pageNo, nd)
+}
+
+// appendSplit handles the common "append" pattern (ever-increasing keys,
+// like auto-increment ids): when the new key lands past the end of the
+// rightmost leaf, keep the full leaf as it is and start a new leaf with just
+// the new key. A 50/50 split would leave every leaf half empty forever.
+func appendSplit(w Writer, pageNo uint32, nd *node) (*splitResult, error) {
+	last := len(nd.keys) - 1
+	left := &node{leaf: true, keys: nd.keys[:last:last], vals: nd.vals[:last:last]}
+	right := &node{leaf: true, keys: nd.keys[last:], vals: nd.vals[last:]}
+	if left.size() > pager.PageSize {
+		return writeOrSplit(w, pageNo, nd)
+	}
+	rightPage, err := w.Alloc()
+	if err != nil {
+		return nil, err
+	}
+	left.next = rightPage
+	if err := writeNode(w, pageNo, left); err != nil {
+		return nil, err
+	}
+	if err := writeNode(w, rightPage, right); err != nil {
+		return nil, err
+	}
+	return &splitResult{sep: bytes.Clone(right.keys[0]), right: rightPage}, nil
+}
+
+func encodeLeafCell(key []byte, v leafVal) []byte {
+	c := binary.AppendUvarint(nil, uint64(len(key)))
+	c = append(c, key...)
+	if v.overflow {
+		c = append(c, 1)
+		c = binary.LittleEndian.AppendUint32(c, v.total)
+		return binary.LittleEndian.AppendUint32(c, v.first)
+	}
+	c = append(c, 0)
+	c = binary.AppendUvarint(c, uint64(len(v.inline)))
+	return append(c, v.inline...)
+}
+
+// cellEnd returns the offset just past cell i.
+func cellEnd(p []byte, i int) int {
+	_, end := cellKey(p, i)
+	if !isLeaf(p) {
+		return end + 4
+	}
+	if p[end] == 0 {
+		l, n := binary.Uvarint(p[end+1:])
+		return end + 1 + n + int(l)
+	}
+	return end + 9
+}
+
+// usedBytes is the size of the page's header, offsets and cells. Cells are
+// always stored contiguously in key order, so the last cell ends the data.
+func usedBytes(p []byte) int {
+	n := nCells(p)
+	if n == 0 {
+		return headerSize
+	}
+	return cellEnd(p, n-1)
+}
+
+// spliceCell inserts cell as cell i of a leaf that has room for it.
+func spliceCell(p []byte, i int, cell []byte) {
+	n := nCells(p)
+	used := usedBytes(p)
+	oldStart := headerSize + 2*n
+	split := used
+	if i < n {
+		split = cellOff(p, i)
+	}
+	var tmp [pager.PageSize]byte
+	copy(tmp[:headerSize], p[:headerSize])
+	binary.LittleEndian.PutUint16(tmp[1:], uint16(n+1))
+	newStart := headerSize + 2*(n+1)
+	before := copy(tmp[newStart:], p[oldStart:split])
+	copy(tmp[newStart+before:], cell)
+	copy(tmp[newStart+before+len(cell):], p[split:used])
+	for j := 0; j < n; j++ {
+		off := cellOff(p, j) + 2
+		if j >= i {
+			off += len(cell)
+		}
+		dst := j
+		if j >= i {
+			dst = j + 1
+		}
+		binary.LittleEndian.PutUint16(tmp[headerSize+2*dst:], uint16(off))
+	}
+	binary.LittleEndian.PutUint16(tmp[headerSize+2*i:], uint16(newStart+before))
+	copy(p, tmp[:])
 }
 
 func insertAt[T any](s []T, i int, v T) []T {
