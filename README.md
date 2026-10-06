@@ -36,6 +36,8 @@ oakdb=> EXPLAIN SELECT count(*) FROM users WHERE city = 'London';
 - **PostgreSQL compatibility.** Simple and extended wire protocol (prepared statements, binary parameters and results, parameter type inference) and PostgreSQL error codes. It is tested with `pgx` (Go) and `psycopg` (Python).
 - **Tooling.** An interactive shell (`oakdb shell`), an integrity checker (`oakdb check`) and a live monitoring dashboard.
 
+![OakDB monitoring dashboard serving a Python client](docs/dashboard.jpg)
+
 ## How it's tested
 
 A database has to be right, not just fast. The tests include:
