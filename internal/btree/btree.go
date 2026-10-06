@@ -76,9 +76,9 @@ type Writer interface {
 
 // --- raw page accessors (no allocation; used on the read path) ------------
 
-func isLeaf(p []byte) bool    { return p[0] == typeLeaf }
-func nCells(p []byte) int     { return int(binary.LittleEndian.Uint16(p[1:3])) }
-func link(p []byte) uint32    { return binary.LittleEndian.Uint32(p[3:7]) }
+func isLeaf(p []byte) bool { return p[0] == typeLeaf }
+func nCells(p []byte) int  { return int(binary.LittleEndian.Uint16(p[1:3])) }
+func link(p []byte) uint32 { return binary.LittleEndian.Uint32(p[3:7]) }
 func cellOff(p []byte, i int) int {
 	return int(binary.LittleEndian.Uint16(p[headerSize+2*i:]))
 }

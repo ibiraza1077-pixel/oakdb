@@ -73,14 +73,14 @@ type Pager struct {
 
 	writeMu sync.Mutex // held for the whole of a write transaction
 
-	mu       sync.Mutex          // guards the fields below
-	index    map[uint32][]uint64 // page -> committed WAL frame numbers, ascending
-	frames   uint64              // number of committed frames in the WAL
-	readers  int                 // active read snapshots
-	cache    *lru
-	dbPages  uint32 // pages present in the database file
-	closed   bool
-	stats    Stats
+	mu      sync.Mutex          // guards the fields below
+	index   map[uint32][]uint64 // page -> committed WAL frame numbers, ascending
+	frames  uint64              // number of committed frames in the WAL
+	readers int                 // active read snapshots
+	cache   *lru
+	dbPages uint32 // pages present in the database file
+	closed  bool
+	stats   Stats
 }
 
 // Stats are counters exposed on the monitoring page.
