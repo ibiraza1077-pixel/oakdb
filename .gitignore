@@ -1,0 +1,7 @@
+/oakdb
+/oakbench
+*.oak
+*.oak-wal
+/dist/
+.DS_Store
+coverage.out
