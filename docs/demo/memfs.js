@@ -155,6 +155,11 @@
   // Lets the demo page look at, and deliberately damage, OakDB's files.
   globalThis.memfs = {
     size: (path) => files.get(norm(path))?.size ?? 0,
+    // A read-only view of a file's current bytes (valid until the next write).
+    bytes: (path) => {
+      const f = files.get(norm(path));
+      return f ? f.data.subarray(0, f.size) : new Uint8Array(0);
+    },
     // Cuts a file short, the way a crash mid-write leaves the last write torn.
     tear: (path, len) => {
       const f = files.get(norm(path));

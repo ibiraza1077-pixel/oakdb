@@ -4,174 +4,220 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>OakDB Playground</title>
-  <meta name="description" content="Run SQL against OakDB, a database written from scratch in Go, compiled to WebAssembly and running in your browser. Then crash it and watch WAL recovery." />
+  <meta name="description" content="Run SQL against OakDB, a database written from scratch in Go, compiled to WebAssembly. Watch its write-ahead log and B+tree pages change live, then crash it and watch recovery." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..900&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@300;400;500&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Saira+Stencil+One&family=Manrope:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
   <style>
-    /* Layout: a terminal on the left, the engine's live internals on the right. */
+    /* An engineering drawing of a running database: cyanotype ground, white line work,
+       figures drawn from the real file bytes, and red reserved for the crash. */
     :root {
       color-scheme: dark;
-      --ink: #0a0806;
-      --panel: #120e0a;
-      --bone: #ece4d4;
-      --muted: #8e8475;
-      --amber: #ffb547;
-      --amber-hot: #ffdca0;
-      --rust: #c2562b;
-      --ok: #9fdc8c;
-      --line: rgba(236, 228, 212, 0.13);
-      --display: "Archivo", "Arial Black", sans-serif;
-      --sans: "IBM Plex Sans", system-ui, sans-serif;
-      --mono: "IBM Plex Mono", ui-monospace, monospace;
+      --ground: #0e3a63;
+      --ground-deep: #0a2b4b;
+      --panel: rgba(6, 31, 56, 0.72);
+      --line: #dbe9ff;
+      --line-dim: rgba(219, 233, 255, 0.32);
+      --line-faint: rgba(219, 233, 255, 0.12);
+      --text: #eef5ff;
+      --muted: #93b5d9;
+      --leaf: #79bdff;
+      --pencil: #ffd36e;
+      --revision: #ff5d55;
+      --ok: #9be7b0;
+      --stencil: "Saira Stencil One", "Arial Black", sans-serif;
+      --sans: "Manrope", system-ui, sans-serif;
+      --mono: "JetBrains Mono", ui-monospace, monospace;
       --pad: clamp(16px, 3vw, 40px);
     }
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    body { background: var(--ink); color: var(--bone); font-family: var(--sans); font-weight: 300; line-height: 1.55; min-height: 100vh; }
-    a { color: var(--amber); }
+    body {
+      color: var(--text); font-family: var(--sans); line-height: 1.55; min-height: 100vh;
+      background-color: var(--ground);
+      background-image:
+        linear-gradient(var(--line-faint) 1px, transparent 1px),
+        linear-gradient(90deg, var(--line-faint) 1px, transparent 1px),
+        linear-gradient(rgba(219, 233, 255, 0.05) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(219, 233, 255, 0.05) 1px, transparent 1px),
+        radial-gradient(ellipse at 30% 0%, rgba(255, 255, 255, 0.07), transparent 60%);
+      background-size: 96px 96px, 96px 96px, 16px 16px, 16px 16px, 100% 100%;
+    }
+    a { color: var(--line); }
     button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
-    :focus-visible { outline: 1px solid var(--amber); outline-offset: 3px; }
-    code { font-family: var(--mono); font-size: 0.92em; color: var(--amber-hot); }
+    :focus-visible { outline: 2px solid var(--pencil); outline-offset: 3px; }
+    code { font-family: var(--mono); font-size: 0.9em; color: var(--pencil); }
 
-    header { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 16px 32px; padding: 28px var(--pad) 22px; border-bottom: 1px solid var(--line); }
-    .brand { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
-    .kicker { font-family: var(--mono); font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--amber); }
-    h1 { font-family: var(--display); font-weight: 850; font-stretch: 125%; font-size: clamp(34px, 5vw, 64px); line-height: 0.9; letter-spacing: -0.02em; text-transform: uppercase; }
-    .lede { color: #cfc6b5; max-width: 62ch; font-size: 15px; }
-    .head-links { display: flex; gap: 10px; flex-wrap: wrap; }
-    .btn { display: inline-flex; align-items: center; height: 38px; padding: 0 16px; font-family: var(--mono); font-size: 12px; letter-spacing: 0.06em; text-decoration: none; border: 1px solid var(--line); color: var(--bone); transition: background 0.2s, color 0.2s; }
-    .btn:hover { background: var(--bone); color: var(--ink); }
-    .btn--solid { background: var(--amber); color: var(--ink); border-color: var(--amber); font-weight: 500; }
-    .btn--solid:hover { background: var(--amber-hot); }
+    /* Panels carry registration marks at the corners, like a drawing sheet. */
+    .sheet { position: relative; border: 1px solid var(--line-dim); background: var(--panel); backdrop-filter: blur(2px); }
+    .sheet::before, .sheet::after { content: ""; position: absolute; width: 12px; height: 12px; border-color: var(--line); border-style: solid; pointer-events: none; }
+    .sheet::before { top: -5px; left: -5px; border-width: 1px 0 0 1px; }
+    .sheet::after { bottom: -5px; right: -5px; border-width: 0 1px 1px 0; }
+    .caption { font-family: var(--mono); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); }
+    .caption b { color: var(--line); font-weight: 500; }
 
-    main { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 20px; padding: 20px var(--pad) 40px; }
-    @media (max-width: 960px) { main { grid-template-columns: minmax(0, 1fr); } }
+    /* ---------- header + title block ---------- */
+    header { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 24px 40px; align-items: end; padding: 32px var(--pad) 24px; }
+    @media (max-width: 900px) { header { grid-template-columns: minmax(0, 1fr); } }
+    .intro { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+    h1 { font-family: var(--stencil); font-weight: 400; font-size: clamp(44px, 7.5vw, 104px); line-height: 0.86; letter-spacing: 0.01em; text-transform: uppercase; color: var(--line); text-shadow: 0 0 40px rgba(121, 189, 255, 0.25); }
+    h1 small { display: block; font-size: 0.42em; letter-spacing: 0.12em; color: var(--muted); margin-top: 8px; }
+    .lede { max-width: 64ch; font-size: 15.5px; color: #cfe0f5; }
+    .lede strong { color: var(--text); }
+    .links { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 4px; }
+    .btn { display: inline-flex; align-items: center; height: 40px; padding: 0 16px; font-family: var(--mono); font-size: 12px; letter-spacing: 0.04em; text-decoration: none; border: 1px solid var(--line-dim); color: var(--line); transition: background 0.2s, color 0.2s; }
+    .btn:hover { background: var(--line); color: var(--ground-deep); }
+    .btn--solid { background: var(--line); color: var(--ground-deep); font-weight: 700; }
+    .btn--solid:hover { background: #fff; }
+    .titleblock { display: grid; grid-template-columns: auto auto; font-family: var(--mono); font-size: 11px; border: 1px solid var(--line); min-width: 300px; }
+    .titleblock div { padding: 6px 10px; border-right: 1px solid var(--line-dim); border-bottom: 1px solid var(--line-dim); display: flex; flex-direction: column; min-width: 0; }
+    .titleblock div:nth-child(2n) { border-right: 0; }
+    .titleblock div:nth-last-child(-n + 2) { border-bottom: 0; }
+    .titleblock span { font-size: 9px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--muted); }
+    .titleblock b { font-weight: 500; color: var(--line); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    @media (max-width: 900px) { .titleblock { min-width: 0; max-width: 460px; } }
+
+    main { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 28px; padding: 8px var(--pad) 40px; }
+    @media (max-width: 1080px) { main { grid-template-columns: minmax(0, 1fr); } }
+    .col { display: flex; flex-direction: column; gap: 28px; min-width: 0; }
 
     /* ---------- terminal ---------- */
-    .term { display: flex; flex-direction: column; min-width: 0; background: #070504; border: 1px solid var(--line); height: min(76vh, 760px); min-height: 460px; }
-    .term__bar { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--line); font-family: var(--mono); font-size: 11px; color: var(--muted); }
-    .term__bar i { width: 9px; height: 9px; border-radius: 50%; background: #3a2f25; }
-    .term__bar span { margin-left: auto; }
-    .term__out { flex: 1; overflow: auto; padding: 16px 18px; font-family: var(--mono); font-size: 13.5px; line-height: 1.45; color: var(--amber); white-space: pre; tab-size: 4; text-shadow: 0 0 6px rgba(255, 181, 71, 0.25); }
-    .term__out .in { color: var(--amber-hot); }
-    .term__out .err { color: #ff7a52; }
+    .term { display: flex; flex-direction: column; height: min(70vh, 700px); min-height: 440px; }
+    .term__bar { display: flex; justify-content: space-between; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--line-dim); }
+    .term__out { flex: 1; overflow: auto; padding: 16px 18px; font-family: var(--mono); font-size: 13px; line-height: 1.5; color: var(--text); white-space: pre; background: rgba(4, 22, 40, 0.55); }
+    .term__out .in { color: var(--pencil); }
+    .term__out .err { color: var(--revision); }
     .term__out .note { color: var(--muted); white-space: pre-wrap; }
     .term__out .good { color: var(--ok); white-space: pre-wrap; }
-    .term__in { display: flex; align-items: flex-start; gap: 10px; padding: 12px 18px; border-top: 1px solid var(--line); font-family: var(--mono); font-size: 13.5px; }
-    .term__prompt { color: var(--amber-hot); padding-top: 1px; white-space: nowrap; }
-    .term__in textarea { flex: 1; min-width: 0; resize: none; background: transparent; border: 0; outline: none; color: var(--bone); font: inherit; line-height: 1.45; caret-color: var(--amber); }
-    .term__in textarea:disabled { opacity: 0.4; }
+    .term__in { display: flex; align-items: flex-start; gap: 10px; padding: 12px 18px; border-top: 1px solid var(--line-dim); font-family: var(--mono); font-size: 13px; }
+    .term__prompt { color: var(--pencil); padding-top: 1px; white-space: nowrap; }
+    .term__in textarea { flex: 1; min-width: 0; resize: none; background: transparent; border: 0; outline: none; color: var(--text); font: inherit; line-height: 1.5; caret-color: var(--pencil); }
+    .term__in textarea::placeholder { color: var(--line-dim); }
 
-    .examples { display: flex; flex-direction: column; gap: 10px; margin-top: 14px; }
-    .examples__row { display: grid; grid-template-columns: 104px minmax(0, 1fr); align-items: start; gap: 8px; }
-    .examples__chips { display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; }
-    @media (max-width: 560px) { .examples__row { grid-template-columns: minmax(0, 1fr); gap: 6px; } }
-    .examples__label { font-family: var(--mono); font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--muted); padding-top: 8px; }
-    .chip { font-family: var(--mono); font-size: 12px; padding: 6px 10px; border: 1px solid rgba(255, 181, 71, 0.32); color: var(--amber); background: rgba(255, 181, 71, 0.04); transition: background 0.2s, color 0.2s; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .chip:hover { background: var(--amber); color: var(--ink); }
+    .examples { display: flex; flex-direction: column; gap: 10px; }
+    .examples__row { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 8px; align-items: start; }
+    .examples__row .caption { padding-top: 7px; }
+    .examples__chips { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
+    @media (max-width: 560px) { .examples__row { grid-template-columns: minmax(0, 1fr); } }
+    .chip { font-family: var(--mono); font-size: 12px; padding: 5px 10px; border: 1px dashed var(--line-dim); color: var(--line); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; transition: border-color 0.2s, background 0.2s, color 0.2s; }
+    .chip:hover { border-style: solid; border-color: var(--line); background: var(--line); color: var(--ground-deep); }
 
-    /* ---------- side panels ---------- */
-    aside { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
-    .panel { background: var(--panel); border: 1px solid var(--line); padding: 18px; display: flex; flex-direction: column; gap: 14px; }
-    .panel h2 { font-family: var(--display); font-weight: 800; font-stretch: 112%; font-size: 19px; letter-spacing: -0.01em; }
-    .panel p { font-size: 13px; color: #cfc6b5; }
-    .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--line); border: 1px solid var(--line); }
-    .stats div { background: #0d0a07; padding: 10px 12px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-    .stats dt { font-family: var(--mono); font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
-    .stats dd { font-family: var(--mono); font-size: 18px; color: var(--amber-hot); font-variant-numeric: tabular-nums; }
-    .file { display: flex; flex-direction: column; gap: 6px; font-family: var(--mono); font-size: 12px; }
-    .file__row { display: flex; justify-content: space-between; gap: 8px; color: var(--muted); }
-    .file__row b { color: var(--bone); font-weight: 400; font-variant-numeric: tabular-nums; }
-    .meter { height: 6px; background: #241c14; position: relative; overflow: hidden; }
-    .meter i { position: absolute; inset: 0 auto 0 0; width: 0; background: var(--amber); transition: width 0.4s; }
-    .tx { font-family: var(--mono); font-size: 12px; color: var(--muted); }
-    .tx b { color: var(--amber-hot); font-weight: 400; }
+    /* ---------- figures ---------- */
+    .fig { padding: 16px 18px 18px; display: flex; flex-direction: column; gap: 12px; }
+    .fig__head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+    .fig h2 { font-family: var(--mono); font-weight: 500; font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--line); }
+    .fig canvas { display: block; width: 100%; }
+    .fig p { font-size: 13px; color: #c3d8ef; max-width: 62ch; }
+    .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-family: var(--mono); font-size: 11px; color: var(--muted); }
+    .legend i { display: inline-block; width: 12px; height: 9px; margin-right: 6px; vertical-align: -1px; border: 1px solid var(--line); }
+    .sw-header { background: var(--line); }
+    .sw-internal { background: repeating-linear-gradient(45deg, var(--line) 0 1px, transparent 1px 4px); }
+    .sw-leaf { background: var(--leaf); border-color: var(--leaf) !important; }
+    .sw-other { border-style: dashed !important; }
+    .sw-new { border: 2px solid var(--pencil) !important; }
+    .sw-commit { border-right: 3px solid var(--line) !important; }
 
-    .crash { border-color: rgba(194, 86, 43, 0.6); }
-    .crash h2 { color: #ff9a6b; }
-    .toggle { display: flex; align-items: center; gap: 10px; font-size: 13px; color: #cfc6b5; cursor: pointer; }
-    .toggle input { accent-color: var(--rust); width: 16px; height: 16px; }
-    .kill { height: 46px; background: var(--rust); color: #fff4ea; font-family: var(--mono); font-size: 13px; letter-spacing: 0.06em; font-weight: 500; transition: background 0.2s, box-shadow 0.2s; }
-    .kill:hover { background: #d9653a; box-shadow: 0 0 30px rgba(194, 86, 43, 0.45); }
-    .kill:disabled { opacity: 0.5; cursor: wait; }
-    .steps { list-style: none; display: flex; flex-direction: column; gap: 6px; font-family: var(--mono); font-size: 12px; color: #cfc6b5; }
-    .steps li::before { content: "› "; color: var(--rust); }
+    .schedule { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 12px; }
+    .schedule th, .schedule td { border: 1px solid var(--line-dim); padding: 6px 10px; text-align: left; }
+    .schedule th { font-weight: 400; font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); width: 50%; }
+    .schedule td { color: var(--line); font-variant-numeric: tabular-nums; }
+
+    /* ---------- crash test: the only red on the sheet ---------- */
+    .crash { border-color: rgba(255, 93, 85, 0.65); }
+    .crash::before, .crash::after { border-color: var(--revision); }
+    .crash h2 { color: var(--revision); }
+    .crash__row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+    .toggle { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #c3d8ef; cursor: pointer; }
+    .toggle input { accent-color: var(--revision); width: 16px; height: 16px; }
+    .kill { height: 44px; padding: 0 20px; border: 1px solid var(--revision); color: var(--revision); font-family: var(--mono); font-weight: 700; font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase; background: rgba(255, 93, 85, 0.08); transition: background 0.2s, color 0.2s; }
+    .kill:hover:not(:disabled) { background: var(--revision); color: #fff; }
+    .kill:disabled { opacity: 0.45; cursor: wait; }
+    .steps { list-style: none; counter-reset: s; display: flex; flex-direction: column; gap: 6px; font-family: var(--mono); font-size: 12px; color: #c3d8ef; }
+    .steps li { counter-increment: s; display: grid; grid-template-columns: 28px minmax(0, 1fr); }
+    .steps li::before { content: counter(s, decimal-leading-zero); color: var(--revision); }
     .steps .verdict { color: var(--ok); }
-    .steps .verdict.bad { color: #ff7a52; }
+    .steps .verdict.bad { color: var(--revision); }
 
-    footer { padding: 0 var(--pad) 40px; font-size: 13px; color: var(--muted); max-width: 900px; }
-    footer p + p { margin-top: 8px; }
+    footer { padding: 0 var(--pad) 48px; display: flex; flex-direction: column; gap: 8px; max-width: 980px; font-size: 13px; color: var(--muted); }
 
-    .loading { position: fixed; inset: 0; display: grid; place-items: center; background: var(--ink); z-index: 10; font-family: var(--mono); font-size: 13px; color: var(--amber); }
+    .loading { position: fixed; inset: 0; z-index: 10; display: grid; place-items: center; background: var(--ground-deep); font-family: var(--mono); font-size: 13px; color: var(--line); }
     .loading[hidden] { display: none; }
-    .loading__bar { width: min(320px, 70vw); height: 3px; background: #241c14; margin-top: 14px; }
-    .loading__bar i { display: block; height: 100%; width: 0; background: var(--amber); }
-    @media (prefers-reduced-motion: reduce) { .meter i { transition: none; } }
+    .loading__bar { width: min(340px, 70vw); height: 1px; background: var(--line-dim); margin-top: 14px; }
+    .loading__bar i { display: block; height: 100%; width: 0; background: var(--line); }
   </style>
 </head>
 <body>
   <div class="loading" id="loading" role="status">
-    <div>
-      <div id="loadText">Loading OakDB…</div>
-      <div class="loading__bar"><i id="loadBar"></i></div>
-    </div>
+    <div><div id="loadText">Loading OakDB…</div><div class="loading__bar"><i id="loadBar"></i></div></div>
   </div>
 
   <header>
-    <div class="brand">
-      <p class="kicker">Running in your browser · Go → WebAssembly</p>
-      <h1>OakDB Playground</h1>
-      <p class="lede">This is <strong>OakDB itself</strong>, a SQL database written from scratch in Go, compiled to WebAssembly. Same B+tree, write-ahead log, transactions and query planner as the native binary. Its files live in this tab's memory. Query it, then crash it.</p>
+    <div class="intro">
+      <p class="caption"><b>Sheet 1</b> · Go compiled to WebAssembly · running in this tab</p>
+      <h1>OakDB<small>Playground</small></h1>
+      <p class="lede">This is <strong>OakDB itself</strong>, a SQL database written from scratch in Go: the same B+tree, write-ahead log, transactions and query planner as the native binary. Its two files live in this tab's memory, and the figures on the right are drawn from their real bytes. Query it, then crash it.</p>
+      <nav class="links" aria-label="Links">
+        <a class="btn btn--solid" href="https://github.com/ibiraza1077-pixel/oakdb">Source on GitHub ↗</a>
+        <a class="btn" href="https://github.com/ibiraza1077-pixel/oakdb#how-its-tested">How it's tested ↗</a>
+        <a class="btn" href="https://ibiraza1077-pixel.github.io/portfolio/">Ibrahim Raza ↗</a>
+      </nav>
     </div>
-    <nav class="head-links" aria-label="Links">
-      <a class="btn btn--solid" href="https://github.com/ibiraza1077-pixel/oakdb">Source on GitHub ↗</a>
-      <a class="btn" href="https://ibiraza1077-pixel.github.io/portfolio/">Ibrahim's portfolio ↗</a>
-    </nav>
+    <div class="titleblock" aria-label="Drawing details">
+      <div><span>Project</span><b>OakDB</b></div>
+      <div><span>Drawn by</span><b>I. Raza</b></div>
+      <div><span>Engine</span><b id="tbVersion">loading…</b></div>
+      <div><span>Target</span><b>js / wasm</b></div>
+      <div><span>Scale</span><b>1 cell = 1 page (4 KB)</b></div>
+      <div><span>Revision</span><b id="tbRev">0</b></div>
+    </div>
   </header>
 
   <main>
-    <section aria-label="SQL terminal">
-      <div class="term">
-        <div class="term__bar"><i></i><i></i><i></i> oakdb shell · <span id="version">OakDB</span></div>
+    <div class="col">
+      <section class="sheet term" aria-label="SQL terminal">
+        <div class="term__bar"><span class="caption"><b>oakdb shell</b> · type SQL or \?</span><span class="caption" id="txState">idle</span></div>
         <div class="term__out" id="out" aria-live="polite" tabindex="0"></div>
         <label class="term__in">
           <span class="term__prompt" id="prompt">oak&gt;</span>
           <textarea id="input" rows="1" spellcheck="false" autocapitalize="off" autocomplete="off" aria-label="SQL input" placeholder="SELECT * FROM users LIMIT 5;" disabled></textarea>
         </label>
-      </div>
+      </section>
       <div class="examples" id="examples"></div>
-    </section>
+    </div>
 
-    <aside>
-      <section class="panel crash" aria-labelledby="crashTitle">
-        <h2 id="crashTitle">Crash test</h2>
-        <p>Commit five transactions of ten rows, then kill the process: no close, no checkpoint. Optionally cut the write-ahead log halfway through the last commit, as a power cut would. Reopening runs WAL recovery.</p>
-        <label class="toggle"><input type="checkbox" id="tear" checked /> Tear the last write (power cut mid-commit)</label>
-        <button type="button" class="kill" id="kill" disabled>Kill the process</button>
+    <div class="col">
+      <section class="sheet fig crash" aria-labelledby="crashTitle">
+        <div class="fig__head"><h2 id="crashTitle">Rev. — Crash test</h2><span class="caption">kill −9, in a browser</span></div>
+        <p>Commit five transactions of ten rows, then kill the process: no close, no checkpoint. With the tear on, the WAL is cut part-way through the last commit, as a power cut would leave it. Reopening runs recovery; watch it walk the tape below.</p>
+        <div class="crash__row">
+          <button type="button" class="kill" id="kill" disabled>Kill the process</button>
+          <label class="toggle"><input type="checkbox" id="tear" checked /> Tear the last write</label>
+        </div>
         <ol class="steps" id="steps"></ol>
       </section>
 
-      <section class="panel" aria-labelledby="engineTitle">
-        <h2 id="engineTitle">Engine</h2>
-        <dl class="stats" id="stats"></dl>
-        <p class="tx">Transaction: <b id="txState">idle</b></p>
+      <section class="sheet fig" aria-labelledby="walTitle">
+        <div class="fig__head"><h2 id="walTitle">Fig. 1 — oak.db-wal</h2><span class="caption" id="walCaption">0 frames</span></div>
+        <canvas id="tape" height="120" role="img" aria-label="Write-ahead log frames"></canvas>
+        <div class="legend"><span><i class="sw-new"></i>written by your last command</span><span><i class="sw-commit"></i>commit frame</span><span><i style="border-color: var(--ok)"></i>verified by recovery</span><span><i style="border-color: var(--revision)"></i>discarded</span></div>
+        <p>Every committed page is appended as a 4,120-byte frame: page number, commit flag, salt and a CRC-64 chained to the frame before it. At 1,000 frames a checkpoint folds them into oak.db and the tape starts again.</p>
       </section>
 
-      <section class="panel" aria-labelledby="filesTitle">
-        <h2 id="filesTitle">Files</h2>
-        <div class="file">
-          <div class="file__row"><span>oak.db</span><b id="dbSize">0 B</b></div>
-          <div class="file__row"><span>oak.db-wal</span><b id="walSize">0 B</b></div>
-          <div class="meter" title="WAL frames until the next checkpoint (1,000)"><i id="walMeter"></i></div>
-          <div class="file__row"><span>WAL until checkpoint</span><b id="walPct">0%</b></div>
-        </div>
+      <section class="sheet fig" aria-labelledby="pagesTitle">
+        <div class="fig__head"><h2 id="pagesTitle">Fig. 2 — Page map of oak.db</h2><span class="caption" id="pageCaption">0 pages</span></div>
+        <canvas id="pages" height="120" role="img" aria-label="Database pages by type"></canvas>
+        <div class="legend"><span><i class="sw-header"></i>file header</span><span><i class="sw-internal"></i>B+tree internal</span><span><i class="sw-leaf"></i>B+tree leaf</span><span><i class="sw-other"></i>overflow / free</span><span><i class="sw-new"></i>changed by last command</span></div>
       </section>
-    </aside>
+
+      <section class="sheet fig" aria-labelledby="engineTitle">
+        <div class="fig__head"><h2 id="engineTitle">Schedule — engine counters</h2></div>
+        <table class="schedule" id="stats"></table>
+      </section>
+    </div>
   </main>
 
   <footer>
-    <p>Each 4 KB page write goes to the WAL as a 4,120-byte frame with a chained CRC-64 checksum. A torn frame breaks the chain, so recovery keeps exactly the committed prefix. In the browser, <code>fsync</code> has nothing to flush, so the crash test cuts the WAL file directly, the same way the repository's torn-write tests do.</p>
-    <p>Reload the page for a fresh database. Nothing you type leaves your browser.</p>
+    <p>The page map reads each page's first byte, which OakDB's B+tree uses as the node type; newer copies in the WAL override the file. In a browser <code>fsync</code> has nothing to flush, so the crash test cuts the WAL directly, the same way the repository's torn-write tests do.</p>
+    <p>Reload for a fresh database. Nothing you type leaves your browser.</p>
   </footer>
 
   <script src="memfs.js"></script>
@@ -184,6 +230,9 @@
     const history = [];
     let histPos = 0;
     let db = null;
+    let revision = 0;
+    const PAGE = 4096, FRAME = 4120, WAL_HDR = 32, CHECKPOINT = 1000;
+    const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
 
     const EXAMPLES = [
       ['Explore', ['\\dt', '\\d users', 'SELECT * FROM users ORDER BY id LIMIT 5;', 'SELECT city, count(*) FROM users GROUP BY city ORDER BY 2 DESC;']],
@@ -196,11 +245,169 @@
         'SELECT u.city, count(*) AS orders, sum(o.pence) AS pence FROM orders o JOIN users u ON u.id = o.user_id GROUP BY u.city ORDER BY pence DESC;',
         'SELECT p.category, count(*) AS sold FROM orders o JOIN products p ON p.name = o.item GROUP BY p.category ORDER BY sold DESC;',
       ]],
+      ['Write load', [
+        "INSERT INTO users (name, city) VALUES ('Ada Lovelace', 'London');",
+        "UPDATE orders SET pence = pence + 1 WHERE user_id < 50;",
+        'CREATE INDEX orders_item ON orders (item);',
+      ]],
       ['Transactions', ['BEGIN; DELETE FROM orders; SELECT count(*) FROM orders;', 'ROLLBACK;', 'SELECT count(*) FROM orders;']],
       ['Engine', ['\\stats', 'SELECT version();']],
     ];
 
-    /* ---------- output ---------- */
+    /* ================= reading OakDB's files ================= */
+    function readWal(bytes) {
+      const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      const n = bytes.length > WAL_HDR ? Math.floor((bytes.length - WAL_HDR) / FRAME) : 0;
+      const frames = [];
+      for (let i = 0; i < n; i++) {
+        const o = WAL_HDR + i * FRAME;
+        frames.push({ page: dv.getUint32(o, true), commit: dv.getUint32(o + 4, true) === 1, type: bytes[o + 24] });
+      }
+      const tail = bytes.length > WAL_HDR ? (bytes.length - WAL_HDR) % FRAME : 0;
+      return { frames, tail, bytes: bytes.length };
+    }
+
+    // The current version of every page: the file, overridden by newer WAL frames.
+    function readPages(dbBytes, wal) {
+      const types = [];
+      for (let p = 0; p * PAGE < dbBytes.length; p++) types[p] = p === 0 ? 'header' : dbBytes[p * PAGE];
+      for (const f of wal.frames) types[f.page] = f.page === 0 ? 'header' : f.type;
+      for (let p = 0; p < types.length; p++) if (types[p] === undefined) types[p] = 0;
+      return types;
+    }
+
+    /* ================= drawing ================= */
+    function setupCanvas(canvas, height) {
+      const dpr = Math.min(devicePixelRatio || 1, 2);
+      const w = canvas.clientWidth;
+      canvas.width = Math.round(w * dpr);
+      canvas.height = Math.round(height * dpr);
+      canvas.style.height = height + 'px';
+      const g = canvas.getContext('2d');
+      g.setTransform(dpr, 0, 0, dpr, 0, 0);
+      g.clearRect(0, 0, w, height);
+      return { g, w };
+    }
+
+    function hatch(g, x, y, w, h, color) {
+      g.save();
+      g.beginPath(); g.rect(x, y, w, h); g.clip();
+      g.strokeStyle = color; g.lineWidth = 1;
+      for (let i = -h; i < w; i += 4) { g.beginPath(); g.moveTo(x + i, y + h); g.lineTo(x + i + h, y); g.stroke(); }
+      g.restore();
+    }
+
+    function grid(n, width, big, mid, small) {
+      const size = n <= 48 ? big : n <= 220 ? mid : small;
+      const gap = size > 20 ? 4 : 2;
+      const cols = Math.max(1, Math.floor((width + gap) / (size + gap)));
+      return { size, gap, cols, rows: Math.max(1, Math.ceil(n / cols)) };
+    }
+
+    // Fig. 1: one cell per WAL frame. `anim` drives the recovery walk.
+    let lastWal = { frames: [], tail: 0, bytes: 0 };
+    let freshFrom = 0;
+    function drawTape(wal = lastWal, anim = null) {
+      const canvas = $('#tape');
+      const n = wal.frames.length + (wal.tail ? 1 : 0);
+      const L = grid(Math.max(n, 1), canvas.clientWidth, 34, 15, 8);
+      const height = Math.max(64, L.rows * (L.size + L.gap) + 34);
+      const { g, w } = setupCanvas(canvas, height);
+      const line = css('--line'), dim = css('--line-dim'), pencil = css('--pencil'), red = css('--revision'), ok = css('--ok');
+      g.font = `500 ${L.size > 28 ? 10 : 9}px "JetBrains Mono", monospace`;
+      g.textAlign = 'center'; g.textBaseline = 'middle';
+      if (!n) {
+        g.fillStyle = dim;
+        g.fillText('empty: every commit so far has been checkpointed into oak.db', w / 2, 24);
+      }
+      for (let i = 0; i < n; i++) {
+        const x = (i % L.cols) * (L.size + L.gap), y = Math.floor(i / L.cols) * (L.size + L.gap);
+        const f = wal.frames[i];
+        const torn = !f;
+        let stroke = dim, fill = null;
+        if (anim) {
+          if (i < anim.cursor) {
+            if (i < anim.keep) { stroke = ok; fill = 'rgba(155,231,176,0.22)'; }
+            else { stroke = red; hatch(g, x, y, L.size, L.size, red); }
+          }
+        } else if (i >= freshFrom) { fill = 'rgba(255,211,110,0.25)'; stroke = pencil; }
+        if (torn) {
+          // A partial frame: only `tail` bytes of it reached the file.
+          const frac = wal.tail / FRAME;
+          g.strokeStyle = red; g.setLineDash([3, 2]); g.strokeRect(x + 0.5, y + 0.5, L.size - 1, L.size - 1); g.setLineDash([]);
+          g.fillStyle = 'rgba(255,93,85,0.35)'; g.fillRect(x, y, L.size * frac, L.size);
+          g.strokeStyle = red; g.lineWidth = 1.5; g.beginPath();
+          for (let k = 0; k <= 6; k++) { const yy = y + (L.size * k) / 6; const xx = x + L.size * frac + (k % 2 ? 3 : -3); k ? g.lineTo(xx, yy) : g.moveTo(xx, yy); }
+          g.stroke(); g.lineWidth = 1;
+          continue;
+        }
+        if (fill) { g.fillStyle = fill; g.fillRect(x, y, L.size, L.size); }
+        g.strokeStyle = stroke; g.strokeRect(x + 0.5, y + 0.5, L.size - 1, L.size - 1);
+        if (f.commit) { g.fillStyle = anim && i >= anim.keep && i < anim.cursor ? red : line; g.fillRect(x + L.size - 3, y, 3, L.size); }
+        if (L.size > 28) { g.fillStyle = line; g.fillText(String(f.page), x + L.size / 2 - 1, y + L.size / 2); }
+      }
+      if (anim && anim.cursor < n) {
+        const i = anim.cursor, x = (i % L.cols) * (L.size + L.gap), y = Math.floor(i / L.cols) * (L.size + L.gap);
+        g.strokeStyle = pencil; g.lineWidth = 2; g.strokeRect(x - 1, y - 1, L.size + 2, L.size + 2); g.lineWidth = 1;
+      }
+      // Dimension line: the file's real size.
+      const yd = L.rows * (L.size + L.gap) + 16;
+      const span = Math.min(w, L.cols * (L.size + L.gap) - L.gap);
+      g.strokeStyle = dim; g.fillStyle = css('--muted');
+      g.beginPath(); g.moveTo(0, yd); g.lineTo(span, yd); g.moveTo(0, yd - 5); g.lineTo(0, yd + 5); g.moveTo(span, yd - 5); g.lineTo(span, yd + 5); g.stroke();
+      const label = ` ${wal.bytes.toLocaleString('en-GB')} bytes = 32-byte header + ${wal.frames.length} frames${wal.tail ? ` + ${wal.tail.toLocaleString('en-GB')}-byte torn tail` : ''} `;
+      g.font = '10px "JetBrains Mono", monospace';
+      const tw = g.measureText(label).width;
+      g.fillStyle = css('--ground-deep'); g.fillRect(span / 2 - tw / 2, yd - 7, tw, 14);
+      g.fillStyle = css('--muted'); g.fillText(label, span / 2, yd);
+      $('#walCaption').textContent = `${wal.frames.length} frame${wal.frames.length === 1 ? '' : 's'} · ${Math.min(100, Math.round((100 * wal.frames.length) / CHECKPOINT))}% to checkpoint`;
+    }
+
+    // Fig. 2: one cell per page, by type; pencil outline for pages your last command wrote.
+    let changed = new Set();
+    function drawPages(types) {
+      const canvas = $('#pages');
+      const L = grid(Math.max(types.length, 1), canvas.clientWidth, 30, 16, 9);
+      const height = L.rows * (L.size + L.gap);
+      const { g } = setupCanvas(canvas, height);
+      const line = css('--line'), dim = css('--line-dim'), leaf = css('--leaf'), pencil = css('--pencil');
+      types.forEach((t, i) => {
+        const x = (i % L.cols) * (L.size + L.gap), y = Math.floor(i / L.cols) * (L.size + L.gap);
+        if (t === 'header') { g.fillStyle = line; g.fillRect(x, y, L.size, L.size); }
+        else if (t === 2) { hatch(g, x, y, L.size, L.size, line); g.strokeStyle = line; g.strokeRect(x + 0.5, y + 0.5, L.size - 1, L.size - 1); }
+        else if (t === 1) { g.fillStyle = leaf; g.fillRect(x, y, L.size, L.size); }
+        else { g.strokeStyle = dim; g.setLineDash([2, 2]); g.strokeRect(x + 0.5, y + 0.5, L.size - 1, L.size - 1); g.setLineDash([]); }
+        if (changed.has(i)) { g.strokeStyle = pencil; g.lineWidth = 2; g.strokeRect(x - 1, y - 1, L.size + 2, L.size + 2); g.lineWidth = 1; }
+      });
+      const count = (k) => types.filter((t) => t === k).length;
+      $('#pageCaption').textContent = `${types.length} pages · ${count(2)} internal · ${count(1)} leaf`;
+    }
+
+    // Re-reads both files after every command and redraws everything.
+    function refresh() {
+      const wal = readWal(memfs.bytes('/oak.db-wal'));
+      freshFrom = wal.frames.length >= lastWal.frames.length ? lastWal.frames.length : 0;
+      changed = new Set(wal.frames.slice(freshFrom).map((f) => f.page));
+      lastWal = wal;
+      drawTape(wal);
+      drawPages(readPages(memfs.bytes('/oak.db'), wal));
+
+      const s = JSON.parse(db.status());
+      const hit = s.cacheHits + s.cacheMisses ? Math.round((100 * s.cacheHits) / (s.cacheHits + s.cacheMisses)) : 100;
+      const fmt = (n) => n.toLocaleString('en-GB');
+      const rows = [
+        ['oak.db', `${fmt(memfs.size('/oak.db'))} bytes`], ['oak.db-wal', `${fmt(memfs.size('/oak.db-wal'))} bytes`],
+        ['Pages', fmt(s.pages)], ['Buffer pool', `${fmt(s.cachedPages)} pages · ${hit}% hits`],
+        ['Commits', fmt(s.commits)], ['Rollbacks', fmt(s.rollbacks)],
+        ['Checkpoints', fmt(s.checkpoints)], ['Queries', fmt(s.queries)],
+      ];
+      $('#stats').innerHTML = rows.map(([k, v]) => `<tr><th scope="row">${k}</th><td>${v}</td></tr>`).join('');
+      $('#txState').textContent = { I: 'idle', T: 'in transaction', E: 'failed transaction: ROLLBACK' }[s.tx] || s.tx;
+      $('#prompt').textContent = prompt();
+      $('#tbRev').textContent = String(revision);
+    }
+
+    /* ================= terminal ================= */
     function print(text, cls) {
       const span = document.createElement('span');
       if (cls) span.className = cls;
@@ -208,44 +415,22 @@
       out.appendChild(span);
       out.scrollTop = out.scrollHeight;
     }
-
     function prompt() {
       const tx = JSON.parse(db.status()).tx;
       return tx === 'T' ? 'oak*>' : tx === 'E' ? 'oak!>' : 'oak>';
     }
-
     function run(text, { echo = true } = {}) {
       const q = text.trim();
       if (!q) return '';
       if (echo) print(`${prompt()} ${q}`, 'in');
       const res = db.exec(q);
-      if (echo) {
-        res.split(/(?<=\n)/).forEach((line) => print(line, /^ERROR/.test(line) ? 'err' : ''));
-      }
+      if (echo) res.split(/(?<=\n)/).forEach((l) => print(l, /^ERROR/.test(l) ? 'err' : ''));
+      revision++;
       refresh();
       return res;
     }
 
-    /* ---------- live internals ---------- */
-    const fmtBytes = (n) => (n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(2)} MB`);
-    function refresh() {
-      const s = JSON.parse(db.status());
-      const hit = s.cacheHits + s.cacheMisses ? Math.round((100 * s.cacheHits) / (s.cacheHits + s.cacheMisses)) : 100;
-      const rows = [
-        ['Pages', s.pages], ['Cached', s.cachedPages], ['Commits', s.commits], ['Rollbacks', s.rollbacks],
-        ['Checkpoints', s.checkpoints], ['WAL frames', s.walFrames], ['Queries', s.queries], ['Cache hits', hit + '%'],
-      ];
-      $('#stats').innerHTML = rows.map(([k, v]) => `<div><dt>${k}</dt><dd>${typeof v === 'number' ? v.toLocaleString('en-GB') : v}</dd></div>`).join('');
-      $('#txState').textContent = { I: 'idle', T: 'open (BEGIN)', E: 'failed, ROLLBACK to continue' }[s.tx] || s.tx;
-      $('#prompt').textContent = prompt();
-      $('#dbSize').textContent = fmtBytes(memfs.size('/oak.db'));
-      $('#walSize').textContent = fmtBytes(memfs.size('/oak.db-wal'));
-      const pct = Math.min(100, Math.round(s.walFrames / 10));
-      $('#walMeter').style.width = pct + '%';
-      $('#walPct').textContent = pct + '%';
-    }
-
-    /* ---------- sample data (deterministic) ---------- */
+    /* ================= sample data (deterministic) ================= */
     function seed() {
       let x = 20271;
       const rnd = () => ((x = (x * 1103515245 + 12345) % 2147483648) / 2147483648);
@@ -258,81 +443,109 @@
         ['Standing desk', 'Furniture', 39999], ['Desk lamp', 'Furniture', 3999], ['Office chair', 'Furniture', 29999], ['USB-C hub', 'Accessories', 3499],
         ['Laptop stand', 'Accessories', 2999], ['Noise-cancelling headphones', 'Audio', 27999], ['Studio microphone', 'Audio', 12999], ['Webcam', 'Peripherals', 7999],
       ];
-      const sql = [];
-      sql.push('CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL, city TEXT);');
-      sql.push('CREATE TABLE products (id INTEGER PRIMARY KEY, name TEXT NOT NULL, category TEXT, pence INTEGER);');
-      sql.push('CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, item TEXT, pence INTEGER);');
-      const users = Array.from({ length: 400 }, () => `('${pick(first)} ${pick(last)}', '${pick(cities)}')`);
-      sql.push(`INSERT INTO users (name, city) VALUES ${users.join(',')};`);
-      sql.push(`INSERT INTO products (name, category, pence) VALUES ${products.map(([n, c, p]) => `('${n}', '${c}', ${p})`).join(',')};`);
+      const sql = [
+        'CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL, city TEXT);',
+        'CREATE TABLE products (id INTEGER PRIMARY KEY, name TEXT NOT NULL, category TEXT, pence INTEGER);',
+        'CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, item TEXT, pence INTEGER);',
+        `INSERT INTO users (name, city) VALUES ${Array.from({ length: 400 }, () => `('${pick(first)} ${pick(last).replace("'", "''")}', '${pick(cities)}')`).join(',')};`,
+        `INSERT INTO products (name, category, pence) VALUES ${products.map(([n, c, p]) => `('${n}', '${c}', ${p})`).join(',')};`,
+      ];
       for (let b = 0; b < 4; b++) {
-        const orders = Array.from({ length: 600 }, () => {
-          const [n, , p] = pick(products);
-          return `(${1 + Math.floor(rnd() * 400)}, '${n}', ${p})`;
-        });
-        sql.push(`INSERT INTO orders (user_id, item, pence) VALUES ${orders.join(',')};`);
+        sql.push(`INSERT INTO orders (user_id, item, pence) VALUES ${Array.from({ length: 600 }, () => { const [n, , p] = pick(products); return `(${1 + Math.floor(rnd() * 400)}, '${n}', ${p})`; }).join(',')};`);
       }
-      sql.push('CREATE INDEX users_city ON users (city);');
-      sql.push('CREATE INDEX orders_user ON orders (user_id);');
+      sql.push('CREATE INDEX users_city ON users (city);', 'CREATE INDEX orders_user ON orders (user_id);');
       for (const s of sql) {
         const res = db.exec(s);
         if (/^ERROR/m.test(res)) throw new Error(res);
       }
     }
 
-    /* ---------- crash test ---------- */
-    let round = 0;
-    function crashTest() {
+    /* ================= crash test ================= */
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    async function crashTest() {
+      const btn = $('#kill');
+      btn.disabled = true;
       const steps = $('#steps');
-      const step = (t, cls) => { const li = document.createElement('li'); li.textContent = t; if (cls) li.className = cls; steps.appendChild(li); };
       steps.innerHTML = '';
-      round++;
-      const tear = $('#tear').checked;
-      if (JSON.parse(db.status()).tx !== 'I') db.exec('ROLLBACK;');
-      db.exec('DROP TABLE IF EXISTS crash_log;');
-      db.exec('CREATE TABLE crash_log (id INTEGER PRIMARY KEY, txn INTEGER NOT NULL);');
+      const step = (t, cls) => { const li = document.createElement('li'); li.textContent = t; if (cls) li.className = cls; steps.appendChild(li); };
+      try {
+        const tear = $('#tear').checked;
+        if (JSON.parse(db.status()).tx !== 'I') db.exec('ROLLBACK;');
+        db.exec('DROP TABLE IF EXISTS crash_log;');
+        db.exec('CREATE TABLE crash_log (id INTEGER PRIMARY KEY, txn INTEGER NOT NULL);');
+        refresh();
+        const before = lastWal.frames.length;
 
-      let lastStart = 0;
-      for (let t = 1; t <= 5; t++) {
-        lastStart = memfs.size('/oak.db-wal');
-        db.exec(`BEGIN; INSERT INTO crash_log (txn) VALUES ${Array(10).fill(`(${t})`).join(',')}; COMMIT;`);
-      }
-      const walBytes = memfs.size('/oak.db-wal');
-      step(`Committed 5 transactions × 10 rows. WAL is ${walBytes.toLocaleString('en-GB')} bytes.`);
-
-      let expectTxns = 5;
-      if (tear) {
-        if (walBytes > lastStart) {
-          const cut = lastStart + Math.max(1, Math.floor((walBytes - lastStart) * (0.25 + Math.random() * 0.5)));
-          memfs.tear('/oak.db-wal', cut);
-          expectTxns = 4;
-          step(`Power cut: WAL torn at byte ${cut.toLocaleString('en-GB')}, part-way through transaction 5.`);
-        } else {
-          step('A checkpoint ran during the last commit, so there was no WAL tail to tear this time. Run it again.');
+        let lastStart = 0;
+        for (let t = 1; t <= 5; t++) {
+          lastStart = memfs.size('/oak.db-wal');
+          db.exec(`BEGIN; INSERT INTO crash_log (txn) VALUES ${Array(10).fill(`(${t})`).join(',')}; COMMIT;`);
+          revision++;
+          refresh();
+          freshFrom = before; drawTape();
+          await sleep(220);
         }
-      }
-      step('Process killed: no close, no checkpoint, no rollback.');
-      const r = db.crash();
-      if (r !== 'ok') { step(r, 'verdict bad'); return; }
-      step('Database reopened. WAL recovery ran.');
+        step(`Committed 5 transactions × 10 rows. The WAL holds ${lastWal.frames.length} frames.`);
 
-      print(`\n-- crash test ${round}: after recovery`, 'note');
-      const res = run('SELECT txn, count(*) AS rows FROM crash_log GROUP BY txn ORDER BY txn;');
-      const counts = [...res.matchAll(/^\s+(\d+)\s+\|\s+(\d+)\s*$/gm)].map((m) => [Number(m[1]), Number(m[2])]);
-      const intact = counts.length === expectTxns && counts.every(([t, n], i) => t === i + 1 && n === 10);
-      if (intact) {
-        const msg = expectTxns === 4
-          ? 'Transactions 1–4 survived intact. Transaction 5 vanished completely: no partial rows.'
-          : 'All 5 committed transactions survived the kill.';
-        step(msg, 'verdict');
-        print(`✓ ${msg}`, 'good');
-      } else {
-        step('Unexpected recovery result. See the terminal.', 'verdict bad');
+        let expect = 5;
+        if (tear) {
+          const end = memfs.size('/oak.db-wal');
+          if (end > lastStart) {
+            const cut = lastStart + Math.max(1, Math.floor((end - lastStart) * (0.25 + Math.random() * 0.5)));
+            memfs.tear('/oak.db-wal', cut);
+            expect = 4;
+            const torn = readWal(memfs.bytes('/oak.db-wal'));
+            drawTape(torn);
+            step(`Power cut: WAL torn at byte ${cut.toLocaleString('en-GB')}, inside transaction 5's frames.`);
+          } else {
+            step('A checkpoint ran during the last commit, so there was no tail to tear. Run it again.');
+          }
+          await sleep(700);
+        }
+
+        // What the file looks like as the process dies: recovery is about to walk it.
+        const dying = readWal(memfs.bytes('/oak.db-wal'));
+        const total = dying.frames.length + (dying.tail ? 1 : 0);
+        let keep = 0;
+        dying.frames.forEach((f, i) => { if (f.commit) keep = i + 1; });
+        step('Process killed: no close, no checkpoint, no rollback.');
+        const r = db.crash();
+        if (r !== 'ok') { step(r, 'verdict bad'); return; }
+
+        // Replay the walk on the tape: verified frames up to the last complete commit, the rest discarded.
+        const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+        const dur = reduced ? 0 : Math.min(1800, 30 * total + 500);
+        const t0 = performance.now();
+        await new Promise((done) => {
+          const tick = () => {
+            const k = dur ? Math.min(1, (performance.now() - t0) / dur) : 1;
+            drawTape(dying, { cursor: Math.round(k * total), keep });
+            k < 1 ? requestAnimationFrame(tick) : done();
+          };
+          tick();
+        });
+        step(`Recovery kept ${keep} frame${keep === 1 ? '' : 's'} (everything up to the last complete commit), discarded ${total - keep}, and folded the rest into oak.db.`);
+        await sleep(900);
+
+        print(`\n-- after the crash: what survived?`, 'note');
+        const res = run('SELECT txn, count(*) AS rows FROM crash_log GROUP BY txn ORDER BY txn;');
+        const counts = [...res.matchAll(/^\s+(\d+)\s+\|\s+(\d+)\s*$/gm)].map((m) => [Number(m[1]), Number(m[2])]);
+        const intact = counts.length === expect && counts.every(([t, n], i) => t === i + 1 && n === 10);
+        if (intact) {
+          const msg = expect === 4
+            ? 'Transactions 1–4 survived intact. Transaction 5 vanished completely: no partial rows.'
+            : 'All 5 committed transactions survived the kill.';
+          step(msg, 'verdict');
+          print(`✓ ${msg}`, 'good');
+        } else {
+          step('Unexpected recovery result. See the terminal.', 'verdict bad');
+        }
+      } finally {
+        btn.disabled = false;
       }
-      refresh();
     }
 
-    /* ---------- input ---------- */
+    /* ================= input ================= */
     function autosize() { input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, 160) + 'px'; }
     input.addEventListener('input', autosize);
     input.addEventListener('keydown', (e) => {
@@ -340,22 +553,14 @@
         e.preventDefault();
         const q = input.value;
         if (!q.trim()) return;
-        history.push(q);
-        histPos = history.length;
-        input.value = '';
-        autosize();
-        if (/^\s*(clear|\\!\s*clear)\s*;?\s*$/i.test(q)) { out.textContent = ''; return; }
+        history.push(q); histPos = history.length;
+        input.value = ''; autosize();
+        if (/^\s*clear\s*;?\s*$/i.test(q)) { out.textContent = ''; return; }
         run(q);
-      } else if (e.key === 'ArrowUp' && !input.value.includes('\n') && history.length) {
+      } else if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && !input.value.includes('\n') && history.length) {
         e.preventDefault();
-        histPos = Math.max(0, histPos - 1);
-        input.value = history[histPos];
-        autosize();
-      } else if (e.key === 'ArrowDown' && !input.value.includes('\n') && history.length) {
-        e.preventDefault();
-        histPos = Math.min(history.length, histPos + 1);
-        input.value = history[histPos] ?? '';
-        autosize();
+        histPos = e.key === 'ArrowUp' ? Math.max(0, histPos - 1) : Math.min(history.length, histPos + 1);
+        input.value = history[histPos] ?? ''; autosize();
       }
     });
 
@@ -364,12 +569,11 @@
       for (const [label, qs] of EXAMPLES) {
         const row = document.createElement('div');
         row.className = 'examples__row';
-        row.innerHTML = `<span class="examples__label">${label}</span><div class="examples__chips"></div>`;
+        row.innerHTML = `<span class="caption">${label}</span><div class="examples__chips"></div>`;
         const chips = row.lastChild;
         for (const q of qs) {
           const b = document.createElement('button');
-          b.type = 'button';
-          b.className = 'chip';
+          b.type = 'button'; b.className = 'chip';
           b.textContent = q.length > 64 ? q.slice(0, 62) + '…' : q;
           b.title = q;
           b.addEventListener('click', () => { run(q); input.focus({ preventScroll: true }); });
@@ -379,7 +583,7 @@
       }
     }
 
-    /* ---------- boot ---------- */
+    /* ================= boot ================= */
     async function boot() {
       const bar = $('#loadBar');
       const res = await fetch('oakdb.wasm');
@@ -391,8 +595,7 @@
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
-        chunks.push(value);
-        got += value.length;
+        chunks.push(value); got += value.length;
         if (total) bar.style.width = Math.min(100, (100 * got) / total) + '%';
       }
       const bytes = new Uint8Array(got);
@@ -412,17 +615,20 @@
       const t0 = performance.now();
       seed();
       const ms = Math.round(performance.now() - t0);
+      $('#tbVersion').textContent = db.version.replace(/\s*\(.*\)$/, '');
 
-      $('#version').textContent = db.version;
       print(`${db.version}, compiled to WebAssembly.`, 'note');
-      print(`Sample data: users (400), products (12), orders (2,400), with indexes on users.city and orders.user_id. Loaded in ${ms} ms.`, 'note');
+      print(`Sample data: users (400), products (12), orders (2,400), indexed on users.city and orders.user_id. Loaded in ${ms} ms.`, 'note');
       print('Type SQL ending in a semicolon, or a backslash command (\\? for help). Shift+Enter for a new line.\n', 'note');
       buildExamples();
+      document.fonts.ready.then(refresh);
       refresh();
       $('#loading').hidden = true;
       input.disabled = false;
       $('#kill').disabled = false;
       $('#kill').addEventListener('click', crashTest);
+      let rt;
+      addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(() => { drawTape(); drawPages(readPages(memfs.bytes('/oak.db'), lastWal)); }, 120); });
       input.focus({ preventScroll: true });
     }
 
