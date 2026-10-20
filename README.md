@@ -8,6 +8,8 @@
 
 No database libraries: every layer, from the bytes on disk to the network protocol, is implemented here.
 
+**[▶ Try it in your browser](https://ibiraza1077-pixel.github.io/oakdb/demo/)**: the same engine compiled to WebAssembly. Run SQL against sample data, read the query plans, then kill the process mid-commit and watch WAL recovery keep exactly the committed transactions.
+
 ```console
 $ oakdb serve
 oakdb database oak.db, PostgreSQL protocol on 127.0.0.1:5433
@@ -113,6 +115,12 @@ go build -o oakdb ./cmd/oakdb
 ./oakdb check -data demo.db       # verify every table and index
 ```
 
+To rebuild the browser playground (`docs/demo`) and run its headless smoke test, which needs Node:
+
+```bash
+./scripts/build-demo.sh
+```
+
 Connect from anything that speaks PostgreSQL:
 
 ```bash
@@ -137,7 +145,7 @@ These are deliberate trade-offs, chosen to keep the core small enough to reason 
 ## Project layout
 
 ```
-cmd/oakdb       server, shell, check command, monitoring dashboard
+cmd/oakdb       server, shell, check command, monitoring dashboard, WebAssembly entry point
 cmd/oakbench    benchmark against SQLite
 internal/pager  pages, buffer pool, write-ahead log, snapshots
 internal/btree  B+tree, cursors, overflow pages, invariant checker
@@ -147,7 +155,10 @@ internal/catalog table and index definitions
 internal/engine sessions, transactions, planner, executor, DML and DDL
 internal/pgwire PostgreSQL wire protocol server
 tests/          differential, crash, concurrency and client-driver tests
+tests/browser   headless smoke test of the WebAssembly build
 docs/           design write-ups and benchmarks
+docs/demo       browser playground: the engine as WebAssembly plus an in-memory file system
+scripts/        build-demo.sh
 ```
 
 ## Author

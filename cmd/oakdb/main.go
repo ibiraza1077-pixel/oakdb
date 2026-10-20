@@ -1,3 +1,5 @@
+//go:build !(js && wasm)
+
 // Command oakdb runs the OakDB server or an interactive SQL shell.
 //
 //	oakdb serve [-data FILE] [-addr HOST:PORT] [-http HOST:PORT]

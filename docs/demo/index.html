@@ -1,0 +1,436 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OakDB Playground</title>
+  <meta name="description" content="Run SQL against OakDB, a database written from scratch in Go, compiled to WebAssembly and running in your browser. Then crash it and watch WAL recovery." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..900&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@300;400;500&display=swap" rel="stylesheet" />
+  <style>
+    /* Layout: a terminal on the left, the engine's live internals on the right. */
+    :root {
+      color-scheme: dark;
+      --ink: #0a0806;
+      --panel: #120e0a;
+      --bone: #ece4d4;
+      --muted: #8e8475;
+      --amber: #ffb547;
+      --amber-hot: #ffdca0;
+      --rust: #c2562b;
+      --ok: #9fdc8c;
+      --line: rgba(236, 228, 212, 0.13);
+      --display: "Archivo", "Arial Black", sans-serif;
+      --sans: "IBM Plex Sans", system-ui, sans-serif;
+      --mono: "IBM Plex Mono", ui-monospace, monospace;
+      --pad: clamp(16px, 3vw, 40px);
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--ink); color: var(--bone); font-family: var(--sans); font-weight: 300; line-height: 1.55; min-height: 100vh; }
+    a { color: var(--amber); }
+    button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+    :focus-visible { outline: 1px solid var(--amber); outline-offset: 3px; }
+    code { font-family: var(--mono); font-size: 0.92em; color: var(--amber-hot); }
+
+    header { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 16px 32px; padding: 28px var(--pad) 22px; border-bottom: 1px solid var(--line); }
+    .brand { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+    .kicker { font-family: var(--mono); font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--amber); }
+    h1 { font-family: var(--display); font-weight: 850; font-stretch: 125%; font-size: clamp(34px, 5vw, 64px); line-height: 0.9; letter-spacing: -0.02em; text-transform: uppercase; }
+    .lede { color: #cfc6b5; max-width: 62ch; font-size: 15px; }
+    .head-links { display: flex; gap: 10px; flex-wrap: wrap; }
+    .btn { display: inline-flex; align-items: center; height: 38px; padding: 0 16px; font-family: var(--mono); font-size: 12px; letter-spacing: 0.06em; text-decoration: none; border: 1px solid var(--line); color: var(--bone); transition: background 0.2s, color 0.2s; }
+    .btn:hover { background: var(--bone); color: var(--ink); }
+    .btn--solid { background: var(--amber); color: var(--ink); border-color: var(--amber); font-weight: 500; }
+    .btn--solid:hover { background: var(--amber-hot); }
+
+    main { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 20px; padding: 20px var(--pad) 40px; }
+    @media (max-width: 960px) { main { grid-template-columns: minmax(0, 1fr); } }
+
+    /* ---------- terminal ---------- */
+    .term { display: flex; flex-direction: column; min-width: 0; background: #070504; border: 1px solid var(--line); height: min(76vh, 760px); min-height: 460px; }
+    .term__bar { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--line); font-family: var(--mono); font-size: 11px; color: var(--muted); }
+    .term__bar i { width: 9px; height: 9px; border-radius: 50%; background: #3a2f25; }
+    .term__bar span { margin-left: auto; }
+    .term__out { flex: 1; overflow: auto; padding: 16px 18px; font-family: var(--mono); font-size: 13.5px; line-height: 1.45; color: var(--amber); white-space: pre; tab-size: 4; text-shadow: 0 0 6px rgba(255, 181, 71, 0.25); }
+    .term__out .in { color: var(--amber-hot); }
+    .term__out .err { color: #ff7a52; }
+    .term__out .note { color: var(--muted); white-space: pre-wrap; }
+    .term__out .good { color: var(--ok); white-space: pre-wrap; }
+    .term__in { display: flex; align-items: flex-start; gap: 10px; padding: 12px 18px; border-top: 1px solid var(--line); font-family: var(--mono); font-size: 13.5px; }
+    .term__prompt { color: var(--amber-hot); padding-top: 1px; white-space: nowrap; }
+    .term__in textarea { flex: 1; min-width: 0; resize: none; background: transparent; border: 0; outline: none; color: var(--bone); font: inherit; line-height: 1.45; caret-color: var(--amber); }
+    .term__in textarea:disabled { opacity: 0.4; }
+
+    .examples { display: flex; flex-direction: column; gap: 10px; margin-top: 14px; }
+    .examples__row { display: grid; grid-template-columns: 104px minmax(0, 1fr); align-items: start; gap: 8px; }
+    .examples__chips { display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; }
+    @media (max-width: 560px) { .examples__row { grid-template-columns: minmax(0, 1fr); gap: 6px; } }
+    .examples__label { font-family: var(--mono); font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--muted); padding-top: 8px; }
+    .chip { font-family: var(--mono); font-size: 12px; padding: 6px 10px; border: 1px solid rgba(255, 181, 71, 0.32); color: var(--amber); background: rgba(255, 181, 71, 0.04); transition: background 0.2s, color 0.2s; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .chip:hover { background: var(--amber); color: var(--ink); }
+
+    /* ---------- side panels ---------- */
+    aside { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+    .panel { background: var(--panel); border: 1px solid var(--line); padding: 18px; display: flex; flex-direction: column; gap: 14px; }
+    .panel h2 { font-family: var(--display); font-weight: 800; font-stretch: 112%; font-size: 19px; letter-spacing: -0.01em; }
+    .panel p { font-size: 13px; color: #cfc6b5; }
+    .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--line); border: 1px solid var(--line); }
+    .stats div { background: #0d0a07; padding: 10px 12px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+    .stats dt { font-family: var(--mono); font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
+    .stats dd { font-family: var(--mono); font-size: 18px; color: var(--amber-hot); font-variant-numeric: tabular-nums; }
+    .file { display: flex; flex-direction: column; gap: 6px; font-family: var(--mono); font-size: 12px; }
+    .file__row { display: flex; justify-content: space-between; gap: 8px; color: var(--muted); }
+    .file__row b { color: var(--bone); font-weight: 400; font-variant-numeric: tabular-nums; }
+    .meter { height: 6px; background: #241c14; position: relative; overflow: hidden; }
+    .meter i { position: absolute; inset: 0 auto 0 0; width: 0; background: var(--amber); transition: width 0.4s; }
+    .tx { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+    .tx b { color: var(--amber-hot); font-weight: 400; }
+
+    .crash { border-color: rgba(194, 86, 43, 0.6); }
+    .crash h2 { color: #ff9a6b; }
+    .toggle { display: flex; align-items: center; gap: 10px; font-size: 13px; color: #cfc6b5; cursor: pointer; }
+    .toggle input { accent-color: var(--rust); width: 16px; height: 16px; }
+    .kill { height: 46px; background: var(--rust); color: #fff4ea; font-family: var(--mono); font-size: 13px; letter-spacing: 0.06em; font-weight: 500; transition: background 0.2s, box-shadow 0.2s; }
+    .kill:hover { background: #d9653a; box-shadow: 0 0 30px rgba(194, 86, 43, 0.45); }
+    .kill:disabled { opacity: 0.5; cursor: wait; }
+    .steps { list-style: none; display: flex; flex-direction: column; gap: 6px; font-family: var(--mono); font-size: 12px; color: #cfc6b5; }
+    .steps li::before { content: "› "; color: var(--rust); }
+    .steps .verdict { color: var(--ok); }
+    .steps .verdict.bad { color: #ff7a52; }
+
+    footer { padding: 0 var(--pad) 40px; font-size: 13px; color: var(--muted); max-width: 900px; }
+    footer p + p { margin-top: 8px; }
+
+    .loading { position: fixed; inset: 0; display: grid; place-items: center; background: var(--ink); z-index: 10; font-family: var(--mono); font-size: 13px; color: var(--amber); }
+    .loading[hidden] { display: none; }
+    .loading__bar { width: min(320px, 70vw); height: 3px; background: #241c14; margin-top: 14px; }
+    .loading__bar i { display: block; height: 100%; width: 0; background: var(--amber); }
+    @media (prefers-reduced-motion: reduce) { .meter i { transition: none; } }
+  </style>
+</head>
+<body>
+  <div class="loading" id="loading" role="status">
+    <div>
+      <div id="loadText">Loading OakDB…</div>
+      <div class="loading__bar"><i id="loadBar"></i></div>
+    </div>
+  </div>
+
+  <header>
+    <div class="brand">
+      <p class="kicker">Running in your browser · Go → WebAssembly</p>
+      <h1>OakDB Playground</h1>
+      <p class="lede">This is <strong>OakDB itself</strong>, a SQL database written from scratch in Go, compiled to WebAssembly. Same B+tree, write-ahead log, transactions and query planner as the native binary. Its files live in this tab's memory. Query it, then crash it.</p>
+    </div>
+    <nav class="head-links" aria-label="Links">
+      <a class="btn btn--solid" href="https://github.com/ibiraza1077-pixel/oakdb">Source on GitHub ↗</a>
+      <a class="btn" href="https://ibiraza1077-pixel.github.io/portfolio/">Ibrahim's portfolio ↗</a>
+    </nav>
+  </header>
+
+  <main>
+    <section aria-label="SQL terminal">
+      <div class="term">
+        <div class="term__bar"><i></i><i></i><i></i> oakdb shell · <span id="version">OakDB</span></div>
+        <div class="term__out" id="out" aria-live="polite" tabindex="0"></div>
+        <label class="term__in">
+          <span class="term__prompt" id="prompt">oak&gt;</span>
+          <textarea id="input" rows="1" spellcheck="false" autocapitalize="off" autocomplete="off" aria-label="SQL input" placeholder="SELECT * FROM users LIMIT 5;" disabled></textarea>
+        </label>
+      </div>
+      <div class="examples" id="examples"></div>
+    </section>
+
+    <aside>
+      <section class="panel crash" aria-labelledby="crashTitle">
+        <h2 id="crashTitle">Crash test</h2>
+        <p>Commit five transactions of ten rows, then kill the process: no close, no checkpoint. Optionally cut the write-ahead log halfway through the last commit, as a power cut would. Reopening runs WAL recovery.</p>
+        <label class="toggle"><input type="checkbox" id="tear" checked /> Tear the last write (power cut mid-commit)</label>
+        <button type="button" class="kill" id="kill" disabled>Kill the process</button>
+        <ol class="steps" id="steps"></ol>
+      </section>
+
+      <section class="panel" aria-labelledby="engineTitle">
+        <h2 id="engineTitle">Engine</h2>
+        <dl class="stats" id="stats"></dl>
+        <p class="tx">Transaction: <b id="txState">idle</b></p>
+      </section>
+
+      <section class="panel" aria-labelledby="filesTitle">
+        <h2 id="filesTitle">Files</h2>
+        <div class="file">
+          <div class="file__row"><span>oak.db</span><b id="dbSize">0 B</b></div>
+          <div class="file__row"><span>oak.db-wal</span><b id="walSize">0 B</b></div>
+          <div class="meter" title="WAL frames until the next checkpoint (1,000)"><i id="walMeter"></i></div>
+          <div class="file__row"><span>WAL until checkpoint</span><b id="walPct">0%</b></div>
+        </div>
+      </section>
+    </aside>
+  </main>
+
+  <footer>
+    <p>Each 4 KB page write goes to the WAL as a 4,120-byte frame with a chained CRC-64 checksum. A torn frame breaks the chain, so recovery keeps exactly the committed prefix. In the browser, <code>fsync</code> has nothing to flush, so the crash test cuts the WAL file directly, the same way the repository's torn-write tests do.</p>
+    <p>Reload the page for a fresh database. Nothing you type leaves your browser.</p>
+  </footer>
+
+  <script src="memfs.js"></script>
+  <script src="wasm_exec.js"></script>
+  <script>
+  (() => {
+    const $ = (s) => document.querySelector(s);
+    const out = $('#out');
+    const input = $('#input');
+    const history = [];
+    let histPos = 0;
+    let db = null;
+
+    const EXAMPLES = [
+      ['Explore', ['\\dt', '\\d users', 'SELECT * FROM users ORDER BY id LIMIT 5;', 'SELECT city, count(*) FROM users GROUP BY city ORDER BY 2 DESC;']],
+      ['Planner', [
+        "EXPLAIN SELECT count(*) FROM users WHERE city = 'London';",
+        "EXPLAIN SELECT u.name, o.item FROM users u JOIN orders o ON o.user_id = u.id WHERE u.city = 'Leeds';",
+        'EXPLAIN SELECT o.id, p.category FROM orders o JOIN products p ON p.name = o.item;',
+      ]],
+      ['Joins', [
+        'SELECT u.city, count(*) AS orders, sum(o.pence) AS pence FROM orders o JOIN users u ON u.id = o.user_id GROUP BY u.city ORDER BY pence DESC;',
+        'SELECT p.category, count(*) AS sold FROM orders o JOIN products p ON p.name = o.item GROUP BY p.category ORDER BY sold DESC;',
+      ]],
+      ['Transactions', ['BEGIN; DELETE FROM orders; SELECT count(*) FROM orders;', 'ROLLBACK;', 'SELECT count(*) FROM orders;']],
+      ['Engine', ['\\stats', 'SELECT version();']],
+    ];
+
+    /* ---------- output ---------- */
+    function print(text, cls) {
+      const span = document.createElement('span');
+      if (cls) span.className = cls;
+      span.textContent = text.endsWith('\n') ? text : text + '\n';
+      out.appendChild(span);
+      out.scrollTop = out.scrollHeight;
+    }
+
+    function prompt() {
+      const tx = JSON.parse(db.status()).tx;
+      return tx === 'T' ? 'oak*>' : tx === 'E' ? 'oak!>' : 'oak>';
+    }
+
+    function run(text, { echo = true } = {}) {
+      const q = text.trim();
+      if (!q) return '';
+      if (echo) print(`${prompt()} ${q}`, 'in');
+      const res = db.exec(q);
+      if (echo) {
+        res.split(/(?<=\n)/).forEach((line) => print(line, /^ERROR/.test(line) ? 'err' : ''));
+      }
+      refresh();
+      return res;
+    }
+
+    /* ---------- live internals ---------- */
+    const fmtBytes = (n) => (n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(2)} MB`);
+    function refresh() {
+      const s = JSON.parse(db.status());
+      const hit = s.cacheHits + s.cacheMisses ? Math.round((100 * s.cacheHits) / (s.cacheHits + s.cacheMisses)) : 100;
+      const rows = [
+        ['Pages', s.pages], ['Cached', s.cachedPages], ['Commits', s.commits], ['Rollbacks', s.rollbacks],
+        ['Checkpoints', s.checkpoints], ['WAL frames', s.walFrames], ['Queries', s.queries], ['Cache hits', hit + '%'],
+      ];
+      $('#stats').innerHTML = rows.map(([k, v]) => `<div><dt>${k}</dt><dd>${typeof v === 'number' ? v.toLocaleString('en-GB') : v}</dd></div>`).join('');
+      $('#txState').textContent = { I: 'idle', T: 'open (BEGIN)', E: 'failed, ROLLBACK to continue' }[s.tx] || s.tx;
+      $('#prompt').textContent = prompt();
+      $('#dbSize').textContent = fmtBytes(memfs.size('/oak.db'));
+      $('#walSize').textContent = fmtBytes(memfs.size('/oak.db-wal'));
+      const pct = Math.min(100, Math.round(s.walFrames / 10));
+      $('#walMeter').style.width = pct + '%';
+      $('#walPct').textContent = pct + '%';
+    }
+
+    /* ---------- sample data (deterministic) ---------- */
+    function seed() {
+      let x = 20271;
+      const rnd = () => ((x = (x * 1103515245 + 12345) % 2147483648) / 2147483648);
+      const pick = (a) => a[Math.floor(rnd() * a.length)];
+      const first = ['Ada', 'Alan', 'Grace', 'Linus', 'Barbara', 'Ken', 'Margaret', 'Dennis', 'Radia', 'Edsger', 'Frances', 'Donald', 'Sophie', 'Tim', 'Katherine', 'Guido', 'Anita', 'Bjarne', 'Hedy', 'John', 'Mary', 'Leslie', 'Annie', 'Niklaus'];
+      const last = ['Lovelace', 'Turing', 'Hopper', 'Torvalds', 'Liskov', 'Thompson', 'Hamilton', 'Ritchie', 'Perlman', 'Dijkstra', 'Allen', 'Knuth', 'Wilson', 'Berners-Lee', 'Johnson', 'van Rossum', 'Borg', 'Stroustrup', 'Lamarr', 'Backus', 'Kenneth', 'Lamport', 'Easley', 'Wirth'];
+      const cities = ['London', 'London', 'London', 'Manchester', 'Leeds', 'Birmingham', 'Edinburgh', 'Bristol', 'Glasgow', 'Cardiff'];
+      const products = [
+        ['Mechanical keyboard', 'Peripherals', 8999], ['Trackball', 'Peripherals', 5499], ['27in monitor', 'Displays', 24999], ['Ultrawide monitor', 'Displays', 44999],
+        ['Standing desk', 'Furniture', 39999], ['Desk lamp', 'Furniture', 3999], ['Office chair', 'Furniture', 29999], ['USB-C hub', 'Accessories', 3499],
+        ['Laptop stand', 'Accessories', 2999], ['Noise-cancelling headphones', 'Audio', 27999], ['Studio microphone', 'Audio', 12999], ['Webcam', 'Peripherals', 7999],
+      ];
+      const sql = [];
+      sql.push('CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL, city TEXT);');
+      sql.push('CREATE TABLE products (id INTEGER PRIMARY KEY, name TEXT NOT NULL, category TEXT, pence INTEGER);');
+      sql.push('CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, item TEXT, pence INTEGER);');
+      const users = Array.from({ length: 400 }, () => `('${pick(first)} ${pick(last)}', '${pick(cities)}')`);
+      sql.push(`INSERT INTO users (name, city) VALUES ${users.join(',')};`);
+      sql.push(`INSERT INTO products (name, category, pence) VALUES ${products.map(([n, c, p]) => `('${n}', '${c}', ${p})`).join(',')};`);
+      for (let b = 0; b < 4; b++) {
+        const orders = Array.from({ length: 600 }, () => {
+          const [n, , p] = pick(products);
+          return `(${1 + Math.floor(rnd() * 400)}, '${n}', ${p})`;
+        });
+        sql.push(`INSERT INTO orders (user_id, item, pence) VALUES ${orders.join(',')};`);
+      }
+      sql.push('CREATE INDEX users_city ON users (city);');
+      sql.push('CREATE INDEX orders_user ON orders (user_id);');
+      for (const s of sql) {
+        const res = db.exec(s);
+        if (/^ERROR/m.test(res)) throw new Error(res);
+      }
+    }
+
+    /* ---------- crash test ---------- */
+    let round = 0;
+    function crashTest() {
+      const steps = $('#steps');
+      const step = (t, cls) => { const li = document.createElement('li'); li.textContent = t; if (cls) li.className = cls; steps.appendChild(li); };
+      steps.innerHTML = '';
+      round++;
+      const tear = $('#tear').checked;
+      if (JSON.parse(db.status()).tx !== 'I') db.exec('ROLLBACK;');
+      db.exec('DROP TABLE IF EXISTS crash_log;');
+      db.exec('CREATE TABLE crash_log (id INTEGER PRIMARY KEY, txn INTEGER NOT NULL);');
+
+      let lastStart = 0;
+      for (let t = 1; t <= 5; t++) {
+        lastStart = memfs.size('/oak.db-wal');
+        db.exec(`BEGIN; INSERT INTO crash_log (txn) VALUES ${Array(10).fill(`(${t})`).join(',')}; COMMIT;`);
+      }
+      const walBytes = memfs.size('/oak.db-wal');
+      step(`Committed 5 transactions × 10 rows. WAL is ${walBytes.toLocaleString('en-GB')} bytes.`);
+
+      let expectTxns = 5;
+      if (tear) {
+        if (walBytes > lastStart) {
+          const cut = lastStart + Math.max(1, Math.floor((walBytes - lastStart) * (0.25 + Math.random() * 0.5)));
+          memfs.tear('/oak.db-wal', cut);
+          expectTxns = 4;
+          step(`Power cut: WAL torn at byte ${cut.toLocaleString('en-GB')}, part-way through transaction 5.`);
+        } else {
+          step('A checkpoint ran during the last commit, so there was no WAL tail to tear this time. Run it again.');
+        }
+      }
+      step('Process killed: no close, no checkpoint, no rollback.');
+      const r = db.crash();
+      if (r !== 'ok') { step(r, 'verdict bad'); return; }
+      step('Database reopened. WAL recovery ran.');
+
+      print(`\n-- crash test ${round}: after recovery`, 'note');
+      const res = run('SELECT txn, count(*) AS rows FROM crash_log GROUP BY txn ORDER BY txn;');
+      const counts = [...res.matchAll(/^\s+(\d+)\s+\|\s+(\d+)\s*$/gm)].map((m) => [Number(m[1]), Number(m[2])]);
+      const intact = counts.length === expectTxns && counts.every(([t, n], i) => t === i + 1 && n === 10);
+      if (intact) {
+        const msg = expectTxns === 4
+          ? 'Transactions 1–4 survived intact. Transaction 5 vanished completely: no partial rows.'
+          : 'All 5 committed transactions survived the kill.';
+        step(msg, 'verdict');
+        print(`✓ ${msg}`, 'good');
+      } else {
+        step('Unexpected recovery result. See the terminal.', 'verdict bad');
+      }
+      refresh();
+    }
+
+    /* ---------- input ---------- */
+    function autosize() { input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, 160) + 'px'; }
+    input.addEventListener('input', autosize);
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        const q = input.value;
+        if (!q.trim()) return;
+        history.push(q);
+        histPos = history.length;
+        input.value = '';
+        autosize();
+        if (/^\s*(clear|\\!\s*clear)\s*;?\s*$/i.test(q)) { out.textContent = ''; return; }
+        run(q);
+      } else if (e.key === 'ArrowUp' && !input.value.includes('\n') && history.length) {
+        e.preventDefault();
+        histPos = Math.max(0, histPos - 1);
+        input.value = history[histPos];
+        autosize();
+      } else if (e.key === 'ArrowDown' && !input.value.includes('\n') && history.length) {
+        e.preventDefault();
+        histPos = Math.min(history.length, histPos + 1);
+        input.value = history[histPos] ?? '';
+        autosize();
+      }
+    });
+
+    function buildExamples() {
+      const box = $('#examples');
+      for (const [label, qs] of EXAMPLES) {
+        const row = document.createElement('div');
+        row.className = 'examples__row';
+        row.innerHTML = `<span class="examples__label">${label}</span><div class="examples__chips"></div>`;
+        const chips = row.lastChild;
+        for (const q of qs) {
+          const b = document.createElement('button');
+          b.type = 'button';
+          b.className = 'chip';
+          b.textContent = q.length > 64 ? q.slice(0, 62) + '…' : q;
+          b.title = q;
+          b.addEventListener('click', () => { run(q); input.focus({ preventScroll: true }); });
+          chips.appendChild(b);
+        }
+        box.appendChild(row);
+      }
+    }
+
+    /* ---------- boot ---------- */
+    async function boot() {
+      const bar = $('#loadBar');
+      const res = await fetch('oakdb.wasm');
+      if (!res.ok) throw new Error(`could not download oakdb.wasm (${res.status})`);
+      const total = Number(res.headers.get('content-length')) || 0;
+      const reader = res.body.getReader();
+      const chunks = [];
+      let got = 0;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        got += value.length;
+        if (total) bar.style.width = Math.min(100, (100 * got) / total) + '%';
+      }
+      const bytes = new Uint8Array(got);
+      let off = 0;
+      for (const c of chunks) { bytes.set(c, off); off += c.length; }
+
+      $('#loadText').textContent = 'Starting the engine…';
+      const ready = new Promise((r) => addEventListener('oakdb-ready', r, { once: true }));
+      const go = new Go();
+      const { instance } = await WebAssembly.instantiate(bytes, go.importObject);
+      go.run(instance);
+      await ready;
+      db = window.oakdb;
+      if (db.error) throw new Error(db.error);
+
+      $('#loadText').textContent = 'Loading sample data…';
+      const t0 = performance.now();
+      seed();
+      const ms = Math.round(performance.now() - t0);
+
+      $('#version').textContent = db.version;
+      print(`${db.version}, compiled to WebAssembly.`, 'note');
+      print(`Sample data: users (400), products (12), orders (2,400), with indexes on users.city and orders.user_id. Loaded in ${ms} ms.`, 'note');
+      print('Type SQL ending in a semicolon, or a backslash command (\\? for help). Shift+Enter for a new line.\n', 'note');
+      buildExamples();
+      refresh();
+      $('#loading').hidden = true;
+      input.disabled = false;
+      $('#kill').disabled = false;
+      $('#kill').addEventListener('click', crashTest);
+      input.focus({ preventScroll: true });
+    }
+
+    boot().catch((err) => {
+      $('#loadText').textContent = `OakDB could not start: ${err.message}. Try a recent Chrome, Firefox or Safari.`;
+      $('#loadBar').parentElement.hidden = true;
+    });
+  })();
+  </script>
+</body>
+</html>
